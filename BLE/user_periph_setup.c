@@ -33,25 +33,54 @@
  ****************************************************************************************
  */
 
-#include "user_periph_setup.h"
-#include "datasheet.h"
+#include "user_periph_setup.h"							// Peripheral Header File
+#include "datasheet.h"								// Datasheet Header File
 
-static void set_pad_functions(void)
-{
-#if defined (__DA14586__)
-    // Disallow spontaneous DA14586 SPI Flash wake-up
-    GPIO_ConfigurePin(GPIO_PORT_2, GPIO_PIN_3, OUTPUT, PID_GPIO, true);
-#endif
+void GPIO_Reservations(void) {							// Reserve GPIO pins for UART1 & UART2
 
-		GPIO_ConfigurePin(GPIO_SW_PORT, GPIO_SW_PIN, INPUT_PULLUP, PID_GPIO, false);
+	RESERVE_GPIO(UART_TX, GPIO_PORT_0, GPIO_PIN_6, PID_UART2_TX);
+   	RESERVE_GPIO(UART_RX, GPIO_PORT_0, GPIO_PIN_5, PID_UART2_RX);
+	#if defined (CFG_PRINTF_UART2)
+		RESERVE_GPIO(UART1_TX, UART1_TX_PORT, UART1_TX_PIN, PID_UART1_TX);
+		RESERVE_GPIO(UART1_RX, UART1_RX_PORT, UART1_RX_PIN, PID_UART1_RX);
+    		RESERVE_GPIO(UART2_TX, UART2_TX_PORT, UART2_TX_PIN, PID_UART2_TX);
+		RESERVE_GPIO(UART2_RX, UART2_RX_PORT, UART2_RX_PIN, PID_UART2_RX);
+	#endif
 	
-    GPIO_ConfigurePin(UART2_TX_PORT, UART2_TX_PIN, OUTPUT, PID_UART2_TX, false);
-
-    GPIO_ConfigurePin(LED_PORT, LED_PIN, OUTPUT, PID_GPIO, false);
 }
 
+static void set_pad_functions(void) {						// Set GPIO pin configurations for DA14531MOD
+	
+	#if defined (__DA14531__)							
+   	 	// Disallow spontaneous DA14531 SPI Flash wake-up
+    		GPIO_ConfigurePin(GPIO_PORT_2, GPIO_PIN_3, OUTPUT, PID_GPIO, true);
+	#endif
+
+	GPIO_ConfigurePin(UART1_TX_PORT, UART1_TX_PIN, OUTPUT, PID_UART1_TX, false);	// UART1 used for communicating between DA14531MOD and MCU
+
+	GPIO_ConfigurePin(UART1_RX_PORT, UART1_RX_PIN, INPUT, PID_UART0_RX, false);
+	
+	GPIO_ConfigurePin(UART2_TX_PORT, UART2_TX_PIN, OUTPUT, PID_UART2_TX, false);	// UART2 used for Programming/Debugging DA14531MOD
+
+	GPIO_ConfigurePin(UART2_RX_PORT, UART2_RX_PIN, INPUT, PID_UART2_RX, false);	
+	
+}
+
+// Configuration struct for UART1
+static const uart_cfg1_t uart_cfg1 = {
+    .baud_rate = UART1_BAUDRATE,
+    .data_bits = UART1_DATABITS,
+    .parity = UART1_PARITY,
+    .stop_bits = UART1_STOPBITS,
+    .auto_flow_control = UART1_AFCE,
+    .use_fifo = UART1_FIFO,
+    .tx_fifo_tr_lvl = UART1_TX_FIFO_LEVEL,
+    .rx_fifo_tr_lvl = UART1_RX_FIFO_LEVEL,
+    .intr_priority = 2,
+};
+
 // Configuration struct for UART2
-static const uart_cfg_t uart_cfg = {
+static const uart_cfg2_t uart_cfg2 = {
     .baud_rate = UART2_BAUDRATE,
     .data_bits = UART2_DATABITS,
     .parity = UART2_PARITY,
@@ -63,18 +92,13 @@ static const uart_cfg_t uart_cfg = {
     .intr_priority = 2,
 };
 
-void periph_init(void)
-{
-#if !defined (__DA14531__)
-    // Power up peripherals' power domain
-    SetBits16(PMU_CTRL_REG, PERIPH_SLEEP, 0);
-    while (!(GetWord16(SYS_STAT_REG) & PER_IS_UP));
-    SetBits16(CLK_16M_REG, XTAL16_BIAS_SH_ENABLE, 1);
-#endif
+void periph_init(void) {
+
+   	uart_intialize(UART1, &uart_cfg1);
 	
-    uart_initialize(UART2, &uart_cfg);
+    	uart_initialize(UART2, &uart_cfg2);
 
-    set_pad_functions();
+    	set_pad_functions();
 
-    GPIO_set_pad_latch_en(true);
+    	GPIO_set_pad_latch_en(true);
 }

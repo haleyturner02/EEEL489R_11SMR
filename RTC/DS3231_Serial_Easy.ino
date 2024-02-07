@@ -13,21 +13,6 @@
 // DS3231:  SDA pin   -> Arduino Analog 4 or the dedicated SDA pin
 //          SCL pin   -> Arduino Analog 5 or the dedicated SCL pin
 //
-// Arduino Leonardo:
-// ----------------------
-// DS3231:  SDA pin   -> Arduino Digital 2 or the dedicated SDA pin
-//          SCL pin   -> Arduino Digital 3 or the dedicated SCL pin
-//
-// Arduino Mega:
-// ----------------------
-// DS3231:  SDA pin   -> Arduino Digital 20 (SDA) or the dedicated SDA pin
-//          SCL pin   -> Arduino Digital 21 (SCL) or the dedicated SCL pin
-//
-// Arduino Due:
-// ----------------------
-// DS3231:  SDA pin   -> Arduino Digital 20 (SDA) or the dedicated SDA1 (Digital 70) pin
-//          SCL pin   -> Arduino Digital 21 (SCL) or the dedicated SCL1 (Digital 71) pin
-//
 // The internal pull-up resistors will be activated when using the 
 // hardware I2C interfaces.
 //
@@ -38,13 +23,13 @@
 // pull-up resistors on the data and clock signals.
 //
 
+// Custom Library for I2C interfacing
 #include <DS3231.h>
 
 // Init the DS3231 using the hardware interface
 DS3231  rtc(SDA, SCL);
 
-void setup()
-{
+void setup() {
   // Setup Serial connection
   Serial.begin(115200);
   
@@ -52,24 +37,18 @@ void setup()
   rtc.begin();
   
   // The following lines can be uncommented to set the date and time
-  //rtc.setDOW(MONDAY);     // Set Day-of-Week to SUNDAY
   rtc.setTime(12, 03, 0);     // Set the time to 12:00:00 (24hr format)
   rtc.setDate(7, 2, 2024);   // Set the date to January 1st, 2014
 }
 
-void loop()
-{
-  // Send Day-of-Week
- // Serial.print(rtc.getDOWStr());
- // Serial.print(" ");
+void loop() { 
   
   // Send date
   Serial.print(rtc.getDateStr());
-  //Serial.print(" -- ");
 
   // Send time
   Serial.println(rtc.getTimeStr());
   
-  // Wait one second before repeating :)
+  // Wait before repeating 
   delay (10000);
 }

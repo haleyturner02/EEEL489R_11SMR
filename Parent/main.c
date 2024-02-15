@@ -1,6 +1,7 @@
 /*-------------------------------------------------------------------*/
 /* EELE 489R - Electrical Engineering Design II                      */
 /* Snowfall Measurement and Reporting Team                           */
+/* Parent Device Program                                             */
 /*-------------------------------------------------------------------*/
 
 #include <msp430.h> 
@@ -10,17 +11,23 @@
 /*-------------------------------------------------------------------*/
 unsigned int u1 = 0;                                    // Counter for UART1
 
-// Measurement Global Variables
+/* Measurement Global Variables */
 char measurement1[] = "0000";                           // Newest measurement
 char measurement2[] = "0000";                           // Measurement from 15 minutes prior
 char measurement3[] = "0000";                           // Measurement from 30 minutes prior
 char measurement4[] = "0000";                           // Measurement from 45 minutes prior
 
-// RTC Global Variables
-unsigned int alarm = 0;                                                                     // Indicates if alarm is being setup
-unsigned int t1 = 0;                                                                        // Indicator for which RTC register is being read from
-char Data_In;                                                                               // Temporarily stores received byte from RTC
-char time[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};     // Packet to contain time (day, month, year, hour, minute, second)
+
+/* RTC Global Variables */
+
+volatile unsigned int t1 = 0;
+volatile unsigned int set = 0;
+volatile unsigned int write = 1;
+volatile char Data_In;
+
+unsigned int count = 0;                                                                         // Counter for RTC Alarm Interrupt (count to 15 minutes)
+char reset[] = {0x0F, 0x80};                                                                    // Transmit packet for resetting Alarm flag in RTC Control Register
+char time[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};         // Time packet for receiving time/date from RTC registers
 // Packet Format: {sec1, sec2, min1, min2, hour1, hour2, day1, day2, month1, month2, year}
 // Packet Example: February 8th, 2024 at 2:43:13 -> {0x03, 0x01, 0x03, 0x04, 0x02, 0x0, 0x08, 0x00, 0x02, 0x00, 0x04, 0x02}
 
@@ -44,56 +51,22 @@ void init_BLE() {
 /*-------------------------------------------------------------------*/
 /* I2C Initialization for RTC Communication                          */
 /*-------------------------------------------------------------------*/
-void init_RTC(void) {
+void initRTC(void) {
 
-    UCB0CTLW0 |= UCMODE_3;      // Put into I2C mode
-    UCB0BRW |= 10;              // Prescalar = 10
-    UCB0CTLW0 |= UCMST;         // Master mode
-    UCB0CTLW0 &= ~UCTR;         // Read/RX mode
-    UCB0I2CSA = 0x68;           // Slave Address = 0x68
-    UCB0TBCNT = 1;              // Byte count (1 byte per register in RTC)
-    UCB0CTLW1|= UCASTP_2;       // Auto stop mode
+    UCB0CTLW0 |= UCMODE_3;                              // Put into I2C mode
+    UCB0BRW |= 10;                                      // Prescalar = 10
+    UCB0CTLW0 |= UCMST;                                 // Master mode
+    UCB0CTLW0 &= ~UCTR;                                 // Read/RX mode
+    UCB0I2CSA = 0x68;                                   // Slave Address = 0x68
+    UCB0TBCNT = sizeof(reset);                          // Byte count (1 byte per register in RTC)
+    UCB0CTLW1|= UCASTP_2;                               // Auto stop mode
 
-    P1SEL1 &= ~BIT3;            // P1.3 = SCL
+    P1SEL1 &= ~BIT3;                                    // P1.3 = SCL
     P1SEL0 |= BIT3;
 
-    P1SEL1 &= ~BIT2;            // P1.2 = SDA
+    P1SEL1 &= ~BIT2;                                    // P1.2 = SDA
     P1SEL0 |= BIT2;
 
-}
-
-/*-------------------------------------------------------------------*/
-/* Alarm Setup Function for creating 15 minute alarm on RTC          */
-/*-------------------------------------------------------------------*/
-void setup_alarm() {
-
-    int i;
-    alarm = 1;
-
-    UCB0CTLW0 |= UCTR;
-    UCB0CTLW0 |= UCTXSTT;
-    for(i = 0; i < 100; i++) {}
-
-    alarm = 0;
-
-}
-
-/*-------------------------------------------------------------------*/
-/* Get Time Function for reading time/date from RTC registers        */
-/*-------------------------------------------------------------------*/
-void getTime(void) {
-
-    UCB0CTLW0 |= UCTR;
-    UCB0CTLW0 |= UCTXSTT;
-
-    while((UCB0IFG & UCSTPIFG) == 0) {}
-    UCB0IFG &= ~UCSTPIFG;
-
-    UCB0CTLW0 &= ~UCTR;
-    UCB0CTLW0 |= UCTXSTT;
-
-    while((UCB0IFG & UCSTPIFG) == 0) {}
-    UCB0IFG &= ~UCSTPIFG;
 }
 
 /*-------------------------------------------------------------------*/
@@ -112,7 +85,8 @@ void setTime(void) {
             break;
         case 2:
             time[4] = Data_In & 0x0F;                   // Get lower nibble for hour1 (one's place of hour)
-            time[5] = (Data_In & 0x08) >> 4;            // Get bit 5 for hour2 (ten's place of hour)
+            time[5] = (Data_In & 0x30) >> 4;            // Get bit 5 for hour2 (ten's place of hour)
+
             break;
         case 4:
             time[6] = Data_In & 0x0F;                   // Get lower nibble for day1 (one's place of day)
@@ -133,56 +107,116 @@ void setTime(void) {
 }
 
 /*-------------------------------------------------------------------*/
+/* Get Time Function for Readint RTC Time Registers                  */
+/*-------------------------------------------------------------------*/
+void getTime(void) {
+
+    int i;
+
+    UCB0TBCNT = 1;                                      // Set byte count for reading one byte at a time
+    write = 0;                                          // Indiciate reading from RTC
+
+    for(i = 0; i < 6; i++) {                            // Read all 6 RTC time/date registers
+
+        UCB0CTLW0 |= UCTR;                              // Set I2C to transmit to RTC (register address)
+        UCB0CTLW0 |= UCTXSTT;                           // Send start message
+
+        while((UCB0IFG & UCSTPIFG) == 0) {}             // Wait for data tranmission to complete
+        UCB0IFG &= ~UCSTPIFG;                           // Clear flags
+
+        UCB0CTLW0 &= ~UCTR;                             // Set I2C to receive from RTC (data at register address)
+        UCB0CTLW0 |= UCTXSTT;                           // Send start message
+
+        while((UCB0IFG & UCSTPIFG) == 0) {}             // Wait for data transmission to complete
+        UCB0IFG &= ~UCSTPIFG;                           // Clear flags
+
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Clear RTC Alarm 2 Flag                                            */
+/*-------------------------------------------------------------------*/
+void clearAlarm(void) {
+
+
+    UCB0TBCNT = sizeof(reset);                          // Set byte count to size of reset packet
+    write = 1;                                          // Indicate writing to RTC
+
+    UCB0CTLW0 |= UCTR;                                  // Set I2C to transmit to RTC
+    UCB0CTLW0 |= UCTXSTT;                               // Send start message
+
+    while((UCB0IFG & UCSTPIFG) == 0) {}                 // Wait for data transmission to complete
+    UCB0IFG &= ~UCSTPIFG;                               // Clear flags
+
+    P3IE |= BIT0;                                       // Enable IRQ for SQW once I2C communication is complete
+    set = 0;                                            // Indicate alarm flag no longer set
+
+}
+
+
+/*-------------------------------------------------------------------*/
 /* Main Function for Inializing and Waiting for Interrupts           */
 /*-------------------------------------------------------------------*/
 int main(void) {
 
-	WDTCTL = WDTPW | WDTHOLD;	    // Stop watchdog timer
+    WDTCTL = WDTPW | WDTHOLD;                           // Stop watchdog timer
+    UCB0CTLW0 |= UCSWRST;                               // Software reset for I2C
 
-	UCB0CTLW0 |= UCSWRST;           // Software reset for I2C
-	//UCA1CTLW0 |= UCSWRST;         // Sofware reset for UART1
+    /* I/O Defintiions */
+    P1DIR |= BIT0;                                      // Set P1.0 (LED1) as output
+    P1OUT &= ~BIT0;                                     // Start LED1 off
 
-	// LED Defintiions (for testing)
-	P1DIR |= BIT0;                  // Set P1.0 (LED1) as output
-	P1OUT &= ~BIT0;                 // Start LED1 off
+    P3DIR &= ~BIT0;                                     // Set P3.0 (SQW) as input
+    P3REN |= BIT0;                                      // Enable pull up/down resistors
+    P3OUT |= BIT0;                                      // Set as pull up resistor
+    P3IES |= BIT0;                                      // High to Low Sensitivity for SQW
 
-	P6DIR |= BIT6;                  // Set P6.6 (LED2) as output
-	P6OUT &= ~BIT6;                 // Start LED2 off
+    initRTC();                                          // Initialize I2C settings for RTC communication
 
-	init_RTC();
+    PM5CTL0 &= ~LOCKLPM5;                               // Enable digital I/O
+    UCB0CTLW0 &= ~UCSWRST;                              // Take out of software reset for I2C
 
-    PM5CTL0 &= ~LOCKLPM5;           // Enable digital I/O
+    /* Enable interrupts */
+    UCB0IE |= UCTXIE0 | UCRXIE0;;                       // Local interrupt enable for I2C TX0
 
-    UCB0CTLW0 &= ~UCSWRST;          // Take out of software reset for I2C
-    //UCA1CTLW0 &= ~UCSWRST;        // Take out of software reset for UART1
+    P3IE |= BIT0;                                       // Enable IRQ for SQW
+    P3IFG &= ~BIT0;                                     // Clear flags for SQW
 
-    // Enable interrupts
-    UCB0IE |= UCTXIE0 | UCRXIE0;    // Local interrupt enable for I2C TX0/RX0
+    __enable_interrupt();                               // Global IRQ enable
 
-    __enable_interrupt();           // Global IRQ enable
+    clearAlarm();                                       // Start with Alarm 2 flag cleared in RTC Control Register
 
-    while(1){
+    while(1){                                           // Wait for interrupt to occur
 
-        getTime();
+        if(set == 1) {                                  // Get time from RTC and clear Alarm 2 flag if it has been set
+            getTime();
+            clearAlarm();
+        }
 
     }
 
-	return 0;
+    return 0;
 }
 
 /*-------------------------------------------------------------------*/
 /* Interrupt Service Routine: RTC I2C Communication                  */
 /*-------------------------------------------------------------------*/
-
 #pragma vector = EUSCI_B0_VECTOR
 __interrupt void EUSCI_B0_I2C_ISR(void){
 
-    if(alarm == 0) {                                                    // Get date/time information from RTC Registers
-
-        switch(UCB0IV) {
-            case 0x16:                                                  // Read from RTC Register
-                Data_In = UCB0RXBUF;
-                setTime();                                              // Store read value
+    if(write == 1) {                                                    // I2C Communication for Writing to RTC
+        UCB0TXBUF = reset[t1];                                          // Place next byte into I2C TX buffer
+        t1 = t1 + 1;                                                    // Increment to next byte in packet
+        if(t1 == sizeof(reset)) {                                       // Determine if entire packet has been sent
+            t1 = 0;                                                     // Reset byte counter
+            UCB0IFG &= ~UCTXIFG0;                                       // Clear flag to allow I2C interrupt
+        }
+    } else {                                                            // I2C Communication for
+        switch(UCB0IV) {                                                // Determine if transmitting address or receiving data
+            case 0x16:
+                Data_In = UCB0RXBUF;                                    // Place received data from buffer in temporary variable
+                setTime();                                              // Use data to update time packet
                 if(t1 == 6) {                                           // Reset register counter to 0 after all 6 date/time registers have been read from
                     t1 = 0;
                 } else {                                                // Increase register counter to read from next date/time register
@@ -192,26 +226,31 @@ __interrupt void EUSCI_B0_I2C_ISR(void){
                     }
                 }
                 break;
-            case 0x18:                                                  // Set next RTC Register to read from
-                UCB0TXBUF = t1;
-                break;
-            default:
-                break;
-        }
-
-    } else if(alarm == 1) {                                             // Setup Alarm2 to occur every 15 minutes
-
-        switch(UCB0IV) {
-            case 0x16:
-                break;
             case 0x18:
-                UCB0TXBUF = 0x0B;                                       // Write to register at 0x0B in RTC to control Alarm2 minutes
-                break;
-            default:
+                UCB0TXBUF = t1;                                         // Transmit address to read from
                 break;
         }
-
     }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Interrupt Service Routine: RTC Alarm                              */
+/*-------------------------------------------------------------------*/
+#pragma vector = PORT3_VECTOR
+__interrupt void PORT3_ISR(void){
+
+    P1OUT ^= BIT0;
+    set = 1;                                                            // Indiciate Alarm Flag has been set in RTC Control Register
+    if(count < 15) {                                                    // Increase counter if 15 minutes haven't passed
+        count = count + 1;
+    } else {                                                            // Clear counter and call for measurement if 15 minutes have passed
+        count = 0;
+        // Call for new measurement here
+    }
+
+    P3IE &= ~BIT0;                                                      // Temporarily disable IRQ for SQW
+    P3IFG &= ~BIT0;                                                     // Clear flags for SW1
 
 
 }
@@ -241,3 +280,4 @@ __interrupt void ISR_EUSCI_RX(void) {
     UCA1IFG &= ~UCRXIFG;                                                // Clear flags for RX
 
 }
+

@@ -11,7 +11,8 @@ The RTC will be programmed and debugged using an Arduino to configure its time a
 - +3.3V (LP) to VCC (RTC) 
 - GND (LP) to GND (RTC) 
 - P1.3 (LP) to SCL (RTC) 
-- P1.2 (LP) to SDA (RTC) 
+- P1.2 (LP) to SDA (RTC)
+  
 **Overview:** 
 This code is used to initially setup the RTC by writing to its registers via I2C from the Launchpad. Each register stores a different time/date value (refer to Table), as well as settings for Alarm 1 and 2 and the control & status registers. 
 
@@ -25,3 +26,8 @@ This code is used to initially setup the RTC by writing to its registers via I2C
 |      4     | Date    |  0x04   |   0   |   0   | Tens  | Tens  | Ones  | Ones  | Ones  | Ones  |
 |      5     | Month   |  0x05   |   0   |   0   |   0   | Tens  | Ones  | Ones  | Ones  | Ones  |
 |      6     | Year    |  0x06   | Tens  | Tens  | Tens  | Tens  | Ones  | Ones  | Ones  | Ones  |
+|     11     | A2 Min  |  0x0B   |   1   |   0   |   0   |   0   |   0   |   0   |   0   |   0   |
+|     12     | A2 Hour |  0x0C   |   1   |   0   |   0   |   0   |   0   |   0   |   0   |   0   |
+|     13     | A2 Date |  0x0D   |   1   |   0   |   0   |   0   |   0   |   0   |   0   |   0   |
+|     14     | Control |  0x0E   |   0   |   0   |   0   |   0   |   0   |   1   |   1   |   0   |
+|     15     | Status  |  0x0F   |   1   |   0   |   0   |   0   |   0   |   0   |  A2F  |  A1F  |

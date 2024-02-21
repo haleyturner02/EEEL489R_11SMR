@@ -3,9 +3,9 @@ The Parent Device is responsible for collecting measurements from Children, as w
 
 ## Programming
 
-Software Platform: Code Composer Studio
-Code: parent.c
-Required Hardware: MSP430FR2355 Launchpad (LP) + USB Cable, MSP430FR2355 Microcontroller, Jumper Wires
-Connections:
-Overview:
+Software Platform: Code Composer Studio \
+Code: parent.c \
+Required Hardware: MSP430FR2355 Launchpad (LP) + USB Cable, MSP430FR2355 Microcontroller, Jumper Wires \
+Connections: \
+Overview: \
 This code is what is run on the microcontroller on the Parent PCB/Device during normal operation for collecting and communicating data. The Launchpad is used to program the target microcontroller.

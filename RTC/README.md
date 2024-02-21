@@ -7,11 +7,11 @@ The RTC will be programmed and debugged using an Arduino to configure its time a
 **Software Platform:** Code Composer Studio \
 **Code:** RTCSetup.c \
 **Required Hardware:** MSP430FR2355 Launchpad (LP) + USB Cable, DS3231 RTC, Jumper Wires \
-**Connections:** 
+**Connections:** \
 - +3.3V (LP) to VCC (RTC) 
 - GND (LP) to GND (RTC) 
 - P1.3 (LP) to SCL (RTC) 
-- P1.2 (LP) to SDA (RTC) \ 
+- P1.2 (LP) to SDA (RTC) 
 **Overview:** \
 This code is used to initially setup the RTC by writing to its registers via I2C from the Launchpad. Each register stores a different time/date value (refer to Table), as well as settings for Alarm 1 and 2 and the control & status registers. 
 

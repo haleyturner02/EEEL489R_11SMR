@@ -11,11 +11,11 @@ The RTC will be programmed and debugged using an Arduino to configure its time a
 - +3.3V (LP) to VCC (RTC) 
 - GND (LP) to GND (RTC) 
 - P1.3 (LP) to SCL (RTC) 
-- P1.2 (LP) to SDA (RTC) 
+- P1.2 (LP) to SDA (RTC) \ 
 **Overview:** \
 This code is used to initially setup the RTC by writing to its registers via I2C from the Launchpad. Each register stores a different time/date value (refer to Table), as well as settings for Alarm 1 and 2 and the control & status registers. 
 
-Register Map:
+**Register Map:**
 
 | Register # | Purpose | Address | Bit 7 | Bit 6 | Bit 5 | Bit 4 | Bit 3 | Bit 2 | Bit 1 | Bit 0 |
 |------------|---------|---------|-------|-------|-------|-------|-------|-------|-------|-------|

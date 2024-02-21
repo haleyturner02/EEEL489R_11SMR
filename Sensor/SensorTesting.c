@@ -138,7 +138,7 @@ void sensor_measurement(void) {
 
         if(cycles > 5 && m < 10) {
 
-            measurement_array[m] = cycles / 58;
+            measurement_array[m] = cycles / 60;        // Maybe 61
             m = m+1;
 
         }

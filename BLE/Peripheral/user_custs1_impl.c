@@ -111,13 +111,11 @@ void user_svc1_measurement_update_ind_handler(ke_msg_id_t const msgid,
 		// Set new value
 		//req->value[0] = measurement;
 		
-		req->value[1] = (measurement >> 8) & 0xFF;
-    req->value[0] = measurement & 0xFF;
+		req->value[0] = (measurement >> 8) & 0xFF;
+    req->value[1] = measurement & 0xFF;
 		
-    // Copy value
-    memcpy(&req->value[0], &measurement, req->length);
 		
-		arch_printf("Value: %u\r\n", (unsigned long) req->value[0]);
+		arch_printf("Value: %u,%u\r\n", (unsigned long) req->value[0], (unsigned long) req->value[1]);
 		
     // Send message
     ke_msg_send(req);

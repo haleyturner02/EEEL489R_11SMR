@@ -58,27 +58,17 @@ enum {
 void user_svc1_ctrl_wr_ind_handler(ke_msg_id_t const msgid,
                                    struct custs1_val_write_ind const *param,
                                    ke_task_id_t const dest_id,
-                                   ke_task_id_t const src_id);
-																	 
-void user_svc1_led_wr_ind_handler(ke_msg_id_t const msgid, 
-																	struct custs1_val_write_ind const *param,
-																	ke_task_id_t const dest_id,
-																	ke_task_id_t const src_id);
-																	 
-void user_svc2_measurement_ind_handler(ke_msg_id_t const msgid,
-                                   struct custs1_val_write_ind const *param,
-                                   ke_task_id_t const dest_id,
-                                   ke_task_id_t const src_id);
-																	 
-void user_svc1_long_val_cfg_ind_handler(ke_msg_id_t const msgid,
-                                           struct custs1_val_write_ind const *param,
-                                           ke_task_id_t const dest_id,
-                                           ke_task_id_t const src_id);
-																					
-void user_svc1_long_val_wr_ind_handler(ke_msg_id_t const msgid,
+                                   ke_task_id_t const src_id);																	 
+																	 																			 
+void user_svc1_measurement_wr_ind_handler(ke_msg_id_t const msgid,
                                           struct custs1_val_write_ind const *param,
                                           ke_task_id_t const dest_id,
-                                          ke_task_id_t const src_id);
+                                          ke_task_id_t const src_id, uint16_t measurement);
+
+void user_svc1_measurement_update_ind_handler(ke_msg_id_t const msgid,
+                                          struct custs1_val_set_req const *param,
+                                          ke_task_id_t const dest_id,
+                                          ke_task_id_t const src_id, uint16_t measurement);																					
 
 /// @} APP
 

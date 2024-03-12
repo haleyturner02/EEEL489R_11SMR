@@ -67,73 +67,62 @@ void user_svc1_ctrl_wr_ind_handler(ke_msg_id_t const msgid,
 			//val = 0;																																								// Clear value
 		}*/
 
-}
-																			
-void user_svc1_led_wr_ind_handler(ke_msg_id_t const msgid, 
-																	struct custs1_val_write_ind const *param,
-																	ke_task_id_t const dest_id,
-																	ke_task_id_t const src_id){
+}																																																
 
-		uint8_t val = 0;
-		memcpy(&val, &param->value[0], param->length);
-		
-		if(val == CUSTS1_LED_ON) {
-			arch_puts("LED On\r\n");
-		} else if (val == CUSTS1_LED_OFF) {
-			arch_puts("LED Off\r\n");
-		}
-																		
-}
-																			
-void user_svc2_measurement_ind_handler(ke_msg_id_t const msgid,
-                                   struct custs1_val_write_ind const *param,
-                                   ke_task_id_t const dest_id,
-                                   ke_task_id_t const src_id){
-
-		uint16_t val = 0x31;
-		memset(&param, val, sizeof(val));
-																					
-																				
-};
-																	 
-void user_svc1_long_val_cfg_ind_handler(ke_msg_id_t const msgid,
-                                           struct custs1_val_write_ind const *param,
-                                           ke_task_id_t const dest_id,
-                                           ke_task_id_t const src_id){
-    // Generate indication when the central subscribes to it
-    if (param->value[0]){
-			
-				arch_puts("Notifications\r\n");
-			
-        uint8_t conidx = KE_IDX_GET(src_id);
-
-        struct custs1_val_ind_req* req = KE_MSG_ALLOC_DYN(CUSTS1_VAL_IND_REQ,
-                                                          prf_get_task_from_id(TASK_ID_CUSTS1),
-                                                          TASK_APP,
-                                                          custs1_val_ind_req,
-                                                          sizeof(indication_counter));
-
-        req->conidx = app_env[conidx].conidx;
-        req->handle = SVC1_IDX_INDICATEABLE_VAL;
-        req->length = sizeof(indication_counter);
-        req->value[0] = (indication_counter >> 8) & 0xFF;
-        req->value[1] = indication_counter & 0xFF;
-
-        indication_counter++;
-
-        ke_msg_send(req);
-    }
-}
-																					 
-void user_svc1_long_val_wr_ind_handler(ke_msg_id_t const msgid,
+// Writes value to Measurement Service
+void user_svc1_measurement_wr_ind_handler(ke_msg_id_t const msgid,
                                           struct custs1_val_write_ind const *param,
                                           ke_task_id_t const dest_id,
-                                          ke_task_id_t const src_id){
+                                          ke_task_id_t const src_id, uint16_t measurement){
 			
-		uint8_t val;
-		memcpy(&val, &param->value[0], param->length);																			
+																					
+		uint16_t val;	
+		//uint8_t test = 0x08;
+		//uint16_t test = measurement;
+																						
+		memcpy(&val, &measurement, sizeof(measurement));																					
+		//memcpy(&val, &param->value[0], param->length);	
+			
+		arch_printf("Write Value: %u\r\n", (unsigned long) param->value[0]);																				
+		arch_printf("Test Value: %u\r\n", (unsigned long) measurement);																					
 	  arch_printf("Set Value: %u\r\n", (unsigned long) val);
 																						
 }
+																					
+void user_svc1_measurement_update_ind_handler(ke_msg_id_t const msgid,
+                                          struct custs1_val_set_req const *param,
+                                          ke_task_id_t const dest_id,
+                                          ke_task_id_t const src_id, uint16_t measurement){
 	
+		struct custs1_val_set_req *req = KE_MSG_ALLOC_DYN(CUSTS1_VAL_SET_REQ,
+                                                        prf_get_task_from_id(TASK_ID_CUSTS1),
+                                                        TASK_APP,
+                                                        custs1_val_set_req,
+                                                        DEF_SVC1_MEASUREMENT_CHAR_LEN);
+		
+		arch_puts("UPDATE MEASUREMENT VALUE\r\n");
+		
+    // Provide the connection index.
+    req->conidx  = app_env[param->conidx].conidx;
+    // Provide the attribute index.
+    req->handle = param->handle;
+    // Force current length to zero.
+    req->length  = sizeof(measurement);
+		// Set new value
+		//req->value[0] = measurement;
+		
+		req->value[1] = (measurement >> 8) & 0xFF;
+    req->value[0] = measurement & 0xFF;
+		
+    // Copy value
+    memcpy(&req->value[0], &measurement, req->length);
+		
+		arch_printf("Value: %u\r\n", (unsigned long) req->value[0]);
+		
+    // Send message
+    ke_msg_send(req);
+
+}
+	
+/// @} CUSTS1
 																					 

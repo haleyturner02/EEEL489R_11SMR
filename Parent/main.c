@@ -12,7 +12,6 @@
 
 /* Sensor Global Variables */
 volatile int cycles;                                                                            // Cycle counter for pulse measuring
-volatile int measurement;                                                                       // May not need
 volatile int measurement_array[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                              // Array for collecting 10 measurements
 volatile int sensor_value;                                                                      // Sensor measurement
 volatile int wait = 0;                                                                          // Indicator for sensor startup time
@@ -31,10 +30,17 @@ char time[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 // Packet Format: {sec1, sec2, min1, min2, hour1, hour2, day1, day2, month1, month2, year}
 // Packet Example: February 8th, 2024 at 2:43:13 -> {0x03, 0x01, 0x03, 0x04, 0x02, 0x0, 0x08, 0x00, 0x02, 0x00, 0x04, 0x02}
 
-/* BLE UART Global Variables */
+/* BLE UART1 Global Variables */
 volatile unsigned int receiving = 0;                                                            // Receiving state indicator (for measurement)
 volatile unsigned int received = 0;                                                             // Character received indicator
-unsigned char receive_data [] = {0x3C, 0x00, 0x00, 0x00, 0x3E};                                 // Packet for received measurement
+volatile unsigned char receive_data [] = {0x3C, 0x00, 0x00, 0x00, 0x3E};                        // Packet for received measurement
+// Packet Format: {'<', hex1, hex2, hex3, '>'}
+// Packet Example: 0x237 -> {0x3C, 0x32, 0x33, 0x37, 0x3D}
+
+/* Transceiver UART0 Global Variables */
+unsigned char data[] = {0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+// Packet Format: {id, min1, min2, hour1, hour2, hundreds, tens, ones}
+// Packet Example: Cluster #1 at 13:46 with measurement of 12cm -> {0x31, 0x36, 0x34, 0x33, 0x31, 0x30, 0x31, 0x32}
 
 /*-------------------------------------------------------------------*/
 /* Sensor I/O Initialization                                         */
@@ -124,6 +130,24 @@ void init_BLE() {
 }
 
 /*-------------------------------------------------------------------*/
+/* UART0 Initialization for Transceiver Communication                */
+/*-------------------------------------------------------------------*/
+void init_Transceiver() {
+    // Settings to acheive baud rate of 115200
+
+    UCA0CTLW0 |= UCSSEL__SMCLK;         // Use SMCLK
+    UCA0BRW = 8;                        // Prescaler = 8
+    UCA0MCTLW = 0xD600;                 // Set modulation and low frequency
+
+    P1SEL1 &= ~BIT6;                    // Set 1.6 to UART A0 RX
+    P1SEL0 |= BIT6;
+
+    P1SEL1 &= ~BIT7;                    // Set P1.7 UART A0 TX
+    P1SEL0 |= BIT7;
+
+}
+
+/*-------------------------------------------------------------------*/
 /* Delay Function for Sensor Startup                                 */
 /*-------------------------------------------------------------------*/
 void delay(void) {
@@ -206,8 +230,8 @@ void sensor_measurement(void) {
     int median;
 
     a = 0;
-    int x;
-    int total_value = 0;
+    //int x;
+    //int total_value = 0;
 
     while(a < 10){                                                  // Go through array 10 times
     prevCount=duplicateCount;                                       // Store previous count of duplicates
@@ -236,6 +260,14 @@ void sensor_measurement(void) {
     }
 
     sensor_value = filter_value;                                    // Set selected value (median or mode) as sensor measurement to store/send
+
+    int n;
+
+    for(n = 11; n > 0; n--) {                                       // Shift previous measurement array
+        prev_measurements[n] = prev_measurements[n-1];
+    }
+
+    prev_measurements[0] = sensor_value;                         // Store newest measurement
 
 }
 
@@ -299,11 +331,45 @@ void store_measurement(void) {
 
    }
 
-   for(i = 11; i > 0; i--) {                                    // Shift previous measurement array
-       prev_measurements[i] = prev_measurements[i-1];
+   int n;
+
+   for(n = 11; n > 0; n--) {                                    // Shift previous measurement array
+       prev_measurements[n] = prev_measurements[n-1];
    }
 
    prev_measurements[0] = m;                                    // Store newest measurement
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Formatting for sending final data to base                         */
+/*-------------------------------------------------------------------*/
+void hexToDecimal(){                                            // Converts received hex number (from BLE) into decimal value and formats data packet for transceiver
+
+    int hundreds, tens, ones, decimal;
+
+    hundreds = ((int) receive_data[1])-48;                      // Get hundreds digit
+    tens = ((int) receive_data[2])-48;                          // Get tens digit
+    ones = ((int) receive_data[3])-48;                          // Get ones digit
+
+    hundreds = hundreds * 256;                                  // Perform conversion for hundreds place
+    tens = tens * 16;                                           // Perform conversion for tens place
+
+    decimal = hundreds + tens + ones;                           // Sum three values together for decimal value
+
+    if(decimal > 99){                                           // Place each digit of decimal value into character data array
+        data[5] = ((decimal - (decimal % 100))/100) + 48;
+    } else {
+        data[5] = 0x30;
+    }
+
+    if((decimal % 100) > 9){
+        data[6] = (((decimal % 100)-ones)/10) + 48;
+    } else {
+        data[6] = 0x30;
+    }
+
+    data[7] = ones + 48;
 
 }
 
@@ -319,12 +385,15 @@ void setTime(void) {
            break;
         case 1:
             time[2] = Data_In & 0x0F;                   // Get lower nibble for min1 (one's place of minutes)
+            data[1] = time[2];
             time[3] = (Data_In & 0x70) >> 4;            // Get upper nibble (not including MSB) for min2 (ten's place of minutes)
+            data[2] = time[3];
             break;
         case 2:
             time[4] = Data_In & 0x0F;                   // Get lower nibble for hour1 (one's place of hour)
+            data[3] = time[4];
             time[5] = (Data_In & 0x30) >> 4;            // Get bit 5 for hour2 (ten's place of hour)
-
+            data[4] = time[5];
             break;
         case 4:
             time[6] = Data_In & 0x0F;                   // Get lower nibble for day1 (one's place of day)
@@ -340,6 +409,21 @@ void setTime(void) {
             break;
         default:
             break;
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Send data packet to transceiver                                   */
+/*-------------------------------------------------------------------*/
+void sendToBase(){
+
+    int i, j;
+
+    for(j = 0; j < sizeof(data); j++){
+        UCA0TXBUF = data[j];
+        for(j = 0; j < 1000; j++){}
+
     }
 
 }
@@ -398,17 +482,19 @@ void clearAlarm(void) {
 int main(void) {
 
     WDTCTL = WDTPW | WDTHOLD;                           // Stop watchdog timer
-    UCA1CTLW0 |= UCSWRST;                               // Put into software reset
-    UCB0CTLW0 |= UCSWRST;                              // Take out of software reset for I2C
-                                         // Initialize I2C settings for RTC communication
+    UCA0CTLW0 |= UCSWRST;                               // Put into software reset for UART0
+    UCA1CTLW0 |= UCSWRST;                               // Put into software reset for UART1
+    UCB0CTLW0 |= UCSWRST;                               // Take out of software reset for I2C
+
     init_sensor();                                      // Initialize I/O settings for sensor
     init_sensorTimer();                                 // Initialize timer settings for PWM measurement
     init_startupTimer();                                // Intialize timer setting for sensor startup
-    init_RTC();
+    init_RTC();                                         // Initialize I2C settings for RTC communication
     init_BLE();                                         // Initialize UART1 settings for BLE communication
 
     PM5CTL0 &= ~LOCKLPM5;                               // Enable digital I/O
-    UCA1CTLW0 &= ~UCSWRST;                              // Take out of software reset
+    UCA0CTLW0 &= ~UCSWRST;                              // Take out of software reset for UART0
+    UCA1CTLW0 &= ~UCSWRST;                              // Take out of software reset for UART1
     UCB0CTLW0 &= ~UCSWRST;                              // Take out of software reset for I2C
 
     /* Enable interrupts */
@@ -444,6 +530,8 @@ int main(void) {
             }
             UCA1IE &= ~UCRXIE;                          // Disable UART1 RX interrupt
             store_measurement();                        // Store received measurement
+            hexToDecimal();
+            sendToBase();
             receiving = 0;                              // Reset receiving state indicator for measurement reception
             collect = 0;                                // Clear measurement collection indicator
         }
@@ -576,6 +664,7 @@ __interrupt void EUSCI_A1_RX_ISR(void) {
         receiving = 4;
     } else if (receiving == 4 && UCA1RXBUF == 0x3E) {               // State 4: Receiving = 4 -> wait for '>' to be received to indicate end of data
         receiving = 5;
+
     }
 
     received = 1;                                                   // Set character received indicator

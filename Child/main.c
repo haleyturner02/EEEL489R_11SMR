@@ -20,7 +20,7 @@ volatile int start = 0;                                                         
 /* BLE UART Global Variables */
 volatile unsigned int received = 0;                                                             // Character received indicator
 volatile unsigned char receive_data = 0x00;                                                     // Character received
-volatile unsigned char measurement[] = {0x28, 0x30, 0x29, 0x5B, 0x30, 0x5D, 0x7B, 0x30, 0x7D};  // Packet for measurement transmission
+volatile unsigned char measurement[] = {0x3C, 0x00, 0x00, 0x00, 0x3E};                          // Packet for measurement transmission
 
 /*-------------------------------------------------------------------*/
 /* Sensor I/O Initialization                                         */
@@ -28,10 +28,10 @@ volatile unsigned char measurement[] = {0x28, 0x30, 0x29, 0x5B, 0x30, 0x5D, 0x7B
 void init_sensor(void) {
 
     // PWM Pin Setup
-    P2DIR &= ~BIT2;                 // Set P2.7 (PWM) as input
-    P2REN |= BIT2;                  // Enable pull up/down resistors
-    P2OUT |= BIT2;                  // Set as pull up resistor
-    P2IES &= ~BIT2;                 // Low to High Sensitivity for PWM
+    P2DIR &= ~BIT7;                 // Set P2.7 (PWM) as input
+    P2REN |= BIT7;                  // Enable pull up/down resistors
+    P2OUT |= BIT7;                  // Set as pull up resistor
+    P2IES &= ~BIT7;                 // Low to High Sensitivity for PWM
 
     // Power Pin Setup
     P2DIR |= BIT6;                  // Set P2.6 (Power) as output
@@ -110,23 +110,23 @@ void sensor_measurement(void) {
 
     for(i=0; i < 25; i++) {             // Collect multiple measurements
 
-        P2IES &= ~BIT2;                 // LOW to HIGH sensitivity
+        P2IES &= ~BIT7;                 // LOW to HIGH sensitivity
 
-        P2IE  |=  BIT2;                 // Enable IRQ for PWM I/O pin
-        P2IFG &= ~BIT2;                 // Clear flags for PWM I/O pin
+        P2IE  |=  BIT7;                 // Enable IRQ for PWM I/O pin
+        P2IFG &= ~BIT7;                 // Clear flags for PWM I/O pin
 
         while(start == 0){}             // Wait for start of pulse
 
-        P2IES |= BIT2;                  // HIGH to LOW sensitivity
-        P2IFG &= ~BIT2;                 // Clear flags for PWM
+        P2IES |= BIT7;                  // HIGH to LOW sensitivity
+        P2IFG &= ~BIT7;                 // Clear flags for PWM
 
         TB0CCTL0 |= CCIE;               // Enable IRQ for Timer B0
         TB0CCTL0 &= ~CCIFG;             // Clear flags for Timer B0
 
         while(start == 1){}             // Wait for PWM measurement
 
-        P2IE  &= ~BIT2;                 // Disable IRQ for PWM
-        P2IFG &= ~BIT2;                 // Clear flags for PWM
+        P2IE  &= ~BIT7;                 // Disable IRQ for PWM
+        P2IFG &= ~BIT7;                 // Clear flags for PWM
 
         TB0CCTL0 &= ~CCIE;              // Disable TimerB0 IRQ
         TB0CCTL0 &= ~CCIFG;             // Clear flags for Timer B0
@@ -257,41 +257,41 @@ void format_packet(){
 
     switch(tens){
         case 0:
-            measurement[4] = 0x30;
+            measurement[2] = 0x30;
             break;
         case 10:
-            measurement[4] = 0x31;
+            measurement[2] = 0x31;
             break;
         case 20:
-            measurement[4] = 0x32;
+            measurement[2] = 0x32;
             break;
         case 30:
-            measurement[4] = 0x33;
+            measurement[2] = 0x33;
             break;
         case 40:
-            measurement[4] = 0x34;
+            measurement[2] = 0x34;
             break;
         case 50:
-            measurement[4] = 0x35;
+            measurement[2] = 0x35;
             break;
         case 60:
-            measurement[4] = 0x36;
+            measurement[2] = 0x36;
             break;
         case 70:
-            measurement[4] = 0x37;
+            measurement[2] = 0x37;
             break;
         case 80:
-            measurement[4] = 0x38;
+            measurement[2] = 0x38;
             break;
         case 90:
-            measurement[4] = 0x39;
+            measurement[2] = 0x39;
             break;
         default:
-            measurement[4] = 0x00;
+            measurement[2] = 0x00;
             break;
     }
 
-    measurement[7] = ((unsigned char) ones) + 48;
+    measurement[3] = ((unsigned char) ones) + 48;
 
 }
 
@@ -332,11 +332,9 @@ int main(void) {
 
     __enable_interrupt();                               // Global IRQ enable
 
-    while(1){
+    delay();
 
-        sensor_value = 304;
-        format_packet();
-        send_measurement();
+    while(1){
 
         UCA0IFG &= ~UCRXIFG;
         while(received == 0){}
@@ -344,11 +342,11 @@ int main(void) {
 
         if(receive_data == 0x23){
             UCA0IE &= ~UCRXIE;
-            //delay();
-            //sensor_measurement();
+            sensor_measurement();
             format_packet();
             send_measurement();
             UCA0IE |= UCRXIE;
+            receive_data = 0x00;
         }
 
     }

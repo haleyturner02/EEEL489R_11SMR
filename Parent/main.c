@@ -16,6 +16,7 @@ volatile int measurement_array[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};              
 volatile int sensor_value;                                                                      // Sensor measurement
 volatile int wait = 0;                                                                          // Indicator for sensor startup time
 volatile int start = 0;                                                                         // Indicator for pulse start/end
+int snowfall = 0;                                                                               // Indicator for new snowfall
 int prev_measurements[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                                 // Array for storing previous 12 measurements
 
 /* RTC Global Variables */
@@ -31,6 +32,10 @@ unsigned int count = 0;                                                         
 char reset[] = {0x0F, 0x80};                                                                    // Transmit packet for resetting Alarm flag in RTC Control Register
 char time[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};         // Time packet for receiving time/date from RTC registers
 // Packet Format: {sec1, sec2, min1, min2, hour1, hour2, day1, day2, month1, month2, year}
+// Packet Example: February 8th, 2024 at 2:43:13 -> {0x03, 0x01, 0x03, 0x04, 0x02, 0x0, 0x08, 0x00, 0x02, 0x00, 0x04, 0x02}
+char updateTime[] = {0x00, 0x00, 0x02, 0x01};                                                   // Time packet for sending update to base station
+// Packet Format: {min1, min2, hour1, hour2}
+// Packet Example: 12:00pm -> {0x00, 0x00, 0x02, 0x01}
 int temperature[] = {0, 0, 0, 0, 0};                                                            // Temperature packet for receiving temperature from RTC registers
 // Packet Format: {frac1, frac2, temp1, temp2, sign}
 // Packet Example: +21.75 degrees Celsius -> {5, 7, 1, 2, 0}
@@ -43,7 +48,7 @@ volatile unsigned char receive_data [] = {0x3C, 0x00, 0x00, 0x00, 0x3E};        
 // Packet Example: 0x237 -> {0x3C, 0x32, 0x33, 0x37, 0x3D}
 
 /* Transceiver UART0 Global Variables */
-unsigned char data[] = {0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+unsigned char data[] = {0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};                        // Packet for data to send to base station
 // Packet Format: {id, min1, min2, hour1, hour2, hundreds, tens, ones}
 // Packet Example: Cluster #1 at 13:46 with measurement of 12cm -> {0x31, 0x36, 0x34, 0x33, 0x31, 0x30, 0x31, 0x32}
 
@@ -379,6 +384,45 @@ void hexToDecimal(){                                            // Converts rece
 }
 
 /*-------------------------------------------------------------------*/
+/* Send Data Packet to transceiver                                   */
+/*-------------------------------------------------------------------*/
+void sendToBase(){
+
+    int i, j;
+
+    for(j = 0; j < sizeof(data); j++){
+        UCA0TXBUF = data[j];
+        for(j = 0; j < 1000; j++){}
+
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Check Time Function for determining base update                   */
+/*-------------------------------------------------------------------*/
+void checkTime(void) {
+
+    if((updateTime[0] == time[2]) && (updateTime[1] == time[3]) && (updateTime[2] == time[4]) && (updateTime[3] == time[5])){       // Check if RTC min/hour matches update time min/hour
+
+        if(snowfall == 1) {                                 // Snowfall has occurred within past 24 hours, base station update not necessary
+            snowfall = 0;                                   // Reset snowfall indicator for next 24 hours
+        } else if (snowfall == 0) {                         // No new snowfall in past 24 hours
+            data[1] = time[2];                              // Set data packet time
+            data[2] = time[3];
+            data[3] = time[4];
+            data[4] = time[5];
+            data[5] = 0x30;                                 // Set measurement values to 0 to indicate no new snowfall occurrence
+            data[6] = 0x30;
+            data[7] = 0x30;
+            sendToBase();                                   // Send update to base
+        }
+
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
 /* Set Time Function for storing time and data from RTC in packet    */
 /*-------------------------------------------------------------------*/
 void setTime(void) {
@@ -569,21 +613,6 @@ void clearAlarm(void) {
 }
 
 /*-------------------------------------------------------------------*/
-/* Send Data Packet to transceiver                                   */
-/*-------------------------------------------------------------------*/
-void sendToBase(){
-
-    int i, j;
-
-    for(j = 0; j < sizeof(data); j++){
-        UCA0TXBUF = data[j];
-        for(j = 0; j < 1000; j++){}
-
-    }
-
-}
-
-/*-------------------------------------------------------------------*/
 /* Main Function for Inializing and Waiting for Interrupts           */
 /*-------------------------------------------------------------------*/
 int main(void) {
@@ -617,13 +646,16 @@ int main(void) {
     getTemp();                                          // Collect initial RTC temperature
     clearAlarm();                                       // Start with Alarm 2 flag cleared in RTC Control Register
 
+    checkTime();
+
     int i;
 
     while(1){
 
-        if(set == 1) {                                  // Get date/time and temperature from RTC and clear Alarm 2 flag if it has been set
+        if(set == 1) {                                      // Get date/time and temperature from RTC and clear Alarm 2 flag if it has been set
             getTime();
             getTemp();
+            checkTime();                                    // Check if base station update is needed
             clearAlarm();
         }
 
@@ -644,8 +676,11 @@ int main(void) {
                 hexToDecimal();                             // Format data packet for sending to base
 
                 // Snowfall computation?? Average measurements from all 3 before sending to base??
+                // Set snowfall indicator in snowfall computation function
 
-                sendToBase();                               // Send data packet to base
+                if(snowfall == 1){                          // Determine if new snowfall has occurred
+                    sendToBase();                           // Send data packet to base
+                }
                 receiving = 0;                              // Reset receiving state indicator for measurement reception
             }
             collect = 0;                                    // Clear measurement collection indicator

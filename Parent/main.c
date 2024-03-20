@@ -53,6 +53,17 @@ unsigned char data[] = {0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};        
 // Packet Example: Cluster #1 at 13:46 with measurement of 12cm -> {0x31, 0x36, 0x34, 0x33, 0x31, 0x30, 0x31, 0x32}
 
 /*-------------------------------------------------------------------*/
+/* Calibration Button Initialization                                 */
+/*-------------------------------------------------------------------*/
+void init_button(void){
+
+    P1DIR &= ~BIT1;                                 // Set P1.1 (button) as input
+    // Pull up/down resistor -> not necessary due to resistor on PCB??
+    P1IES &= ~BIT1;                                 // Low to High Sensitivity for button
+
+}
+
+/*-------------------------------------------------------------------*/
 /* Sensor I/O Initialization                                         */
 /*-------------------------------------------------------------------*/
 void init_sensor(void) {
@@ -622,6 +633,7 @@ int main(void) {
     UCA1CTLW0 |= UCSWRST;                               // Put into software reset for UART1
     UCB0CTLW0 |= UCSWRST;                               // Take out of software reset for I2C
 
+    init_button();
     init_sensor();                                      // Initialize I/O settings for sensor
     init_sensorTimer();                                 // Initialize timer settings for PWM measurement
     init_startupTimer();                                // Intialize timer setting for sensor startup
@@ -637,16 +649,17 @@ int main(void) {
     /* Enable interrupts */
     UCB0IE |= UCTXIE0 | UCRXIE0;;                       // Interrupt enable for I2C TX0
 
+    P1IE |= BIT1;                                       // Enable IRQ for button calibration
+    P1IFG &= ~BIT1;                                     // Clear flags for button
+
     P3IE |= BIT0;                                       // Enable IRQ for RTC Alarm
     P3IFG &= ~BIT0;                                     // Clear flags for RTC Alarm
 
     __enable_interrupt();                               // Global IRQ enable
 
-    getTime();                                          // Collect initial RTC date/time
-    getTemp();                                          // Collect initial RTC temperature
-    clearAlarm();                                       // Start with Alarm 2 flag cleared in RTC Control Register
-
-    checkTime();
+    //getTime();                                          // Collect initial RTC date/time
+    //getTemp();                                          // Collect initial RTC temperature
+    //clearAlarm();                                       // Start with Alarm 2 flag cleared in RTC Control Register
 
     int i;
 
@@ -833,5 +846,16 @@ __interrupt void EUSCI_A1_RX_ISR(void) {
 
     received = 1;                                                   // Set character received indicator
     UCA1IFG &= ~UCRXIFG;                                            // Clear UART1 RX flag
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Interrupt Service Routine: Button Calibration                     */
+/*-------------------------------------------------------------------*/
+#pragma vector = PORT1_VECTOR
+__interrupt void PORT1_ISR(void){
+
+    P1IE &= ~BIT1;                                                      // Disable IRQ after calibration (maybe?)
+    P1IFG &= ~BIT1;                                                     // Clear flags for button
 
 }

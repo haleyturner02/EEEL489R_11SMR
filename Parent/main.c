@@ -19,16 +19,21 @@ volatile int start = 0;                                                         
 int prev_measurements[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                                 // Array for storing previous 12 measurements
 
 /* RTC Global Variables */
-volatile unsigned int t1 = 0;
-volatile unsigned int set = 0;
-volatile unsigned int collect =0;
-volatile unsigned int write = 1;
+volatile unsigned int t1 = 0;                                                                   // Value for reading time/date and storing in packet
+volatile unsigned int t2 = 0;                                                                   // Value for reading temperature and storing in packet
+volatile unsigned int set = 0;                                                                  // Indicator for alarm occurrence
+volatile unsigned int collect =0;                                                               // Indicator for collecting measurement(s)
+volatile unsigned int write = 1;                                                                // Indicator for reading or writing to RTC (1 -> write, 0 -> read)
+volatile unsigned int temp = 0;                                                                 // Indicator for reading time or temperature (1 -> temperature, 0 -> time)
+volatile unsigned int operation = 1;                                                            // Indicator for operation (1 -> normal operation, 0 -> too cold to operate)
 volatile char Data_In;
 unsigned int count = 0;                                                                         // Counter for RTC Alarm Interrupt (count to 15 minutes)
 char reset[] = {0x0F, 0x80};                                                                    // Transmit packet for resetting Alarm flag in RTC Control Register
 char time[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};         // Time packet for receiving time/date from RTC registers
 // Packet Format: {sec1, sec2, min1, min2, hour1, hour2, day1, day2, month1, month2, year}
-// Packet Example: February 8th, 2024 at 2:43:13 -> {0x03, 0x01, 0x03, 0x04, 0x02, 0x0, 0x08, 0x00, 0x02, 0x00, 0x04, 0x02}
+int temperature[] = {0, 0, 0, 0, 0};                                                            // Temperature packet for receiving temperature from RTC registers
+// Packet Format: {frac1, frac2, temp1, temp2, sign}
+// Packet Example: +21.75 degrees Celsius -> {5, 7, 1, 2, 0}
 
 /* BLE UART1 Global Variables */
 volatile unsigned int receiving = 0;                                                            // Receiving state indicator (for measurement)
@@ -117,14 +122,14 @@ void init_RTC(void) {
 void init_BLE() {
     // Settings to acheive baud rate of 115200
 
-    UCA1CTLW0 |= UCSSEL__SMCLK;         // Use SMCLK
-    UCA1BRW = 8;                        // Prescaler = 8
-    UCA1MCTLW = 0xD600;                 // Set modulation and low frequency
+    UCA1CTLW0 |= UCSSEL__SMCLK;                         // Use SMCLK
+    UCA1BRW = 8;                                        // Prescaler = 8
+    UCA1MCTLW = 0xD600;                                 // Set modulation and low frequency
 
-    P4SEL1 &= ~BIT2;                    // Set P4.2 to UART A1 RX
+    P4SEL1 &= ~BIT2;                                    // Set P4.2 to UART A1 RX
     P4SEL0 |= BIT2;
 
-    P4SEL1 &= ~BIT3;                    // Set P4.3 UART A1 TX
+    P4SEL1 &= ~BIT3;                                    // Set P4.3 UART A1 TX
     P4SEL0 |= BIT3;
 
 }
@@ -135,14 +140,14 @@ void init_BLE() {
 void init_Transceiver() {
     // Settings to acheive baud rate of 115200
 
-    UCA0CTLW0 |= UCSSEL__SMCLK;         // Use SMCLK
-    UCA0BRW = 8;                        // Prescaler = 8
-    UCA0MCTLW = 0xD600;                 // Set modulation and low frequency
+    UCA0CTLW0 |= UCSSEL__SMCLK;                         // Use SMCLK
+    UCA0BRW = 8;                                        // Prescaler = 8
+    UCA0MCTLW = 0xD600;                                 // Set modulation and low frequency
 
-    P1SEL1 &= ~BIT6;                    // Set 1.6 to UART A0 RX
+    P1SEL1 &= ~BIT6;                                    // Set 1.6 to UART A0 RX
     P1SEL0 |= BIT6;
 
-    P1SEL1 &= ~BIT7;                    // Set P1.7 UART A0 TX
+    P1SEL1 &= ~BIT7;                                    // Set P1.7 UART A0 TX
     P1SEL0 |= BIT7;
 
 }
@@ -152,13 +157,13 @@ void init_Transceiver() {
 /*-------------------------------------------------------------------*/
 void delay(void) {
 
-    TB1CCTL0 |= CCIE;               // Enable IRQ for Timer B1 CCR0
-    TB1CCTL0 &= ~CCIFG;             // Clear flags for Timer B1 CCR0
+    TB1CCTL0 |= CCIE;                                   // Enable IRQ for Timer B1 CCR0
+    TB1CCTL0 &= ~CCIFG;                                 // Clear flags for Timer B1 CCR0
 
-    while(wait == 0) {}             // Wait for timer to indicate enough time has passed
+    while(wait == 0) {}                                 // Wait for timer to indicate enough time has passed
 
-    TB1CCTL0 &= ~CCIE;              // Disable TimerB1 IRQ
-    TB1CCTL0 &= ~CCIFG;             // Clear flags for Timer B1 CCR0
+    TB1CCTL0 &= ~CCIE;                                  // Disable TimerB1 IRQ
+    TB1CCTL0 &= ~CCIFG;                                 // Clear flags for Timer B1 CCR0
 
 }
 
@@ -267,7 +272,7 @@ void sensor_measurement(void) {
         prev_measurements[n] = prev_measurements[n-1];
     }
 
-    prev_measurements[0] = sensor_value;                         // Store newest measurement
+    prev_measurements[0] = sensor_value;                            // Store newest measurement
 
 }
 
@@ -414,21 +419,6 @@ void setTime(void) {
 }
 
 /*-------------------------------------------------------------------*/
-/* Send data packet to transceiver                                   */
-/*-------------------------------------------------------------------*/
-void sendToBase(){
-
-    int i, j;
-
-    for(j = 0; j < sizeof(data); j++){
-        UCA0TXBUF = data[j];
-        for(j = 0; j < 1000; j++){}
-
-    }
-
-}
-
-/*-------------------------------------------------------------------*/
 /* Get Time Function for Reading RTC Time Registers                  */
 /*-------------------------------------------------------------------*/
 void getTime(void) {
@@ -437,8 +427,110 @@ void getTime(void) {
 
     UCB0TBCNT = 1;                                      // Set byte count for reading one byte at a time
     write = 0;                                          // Indiciate reading from RTC
+    temp = 0;                                           // Indicate reading time from RTC
 
     for(i = 0; i < 6; i++) {                            // Read all 6 RTC time/date registers
+
+        UCB0CTLW0 |= UCTR;                              // Set I2C to transmit to RTC (register address)
+        UCB0CTLW0 |= UCTXSTT;                           // Send start message
+
+        while((UCB0IFG & UCSTPIFG) == 0) {}             // Wait for data tranmission to complete
+        UCB0IFG &= ~UCSTPIFG;                           // Clear flags
+
+        UCB0CTLW0 &= ~UCTR;                             // Set I2C to receive from RTC (data at register address)
+        UCB0CTLW0 |= UCTXSTT;                           // Send start message
+
+        while((UCB0IFG & UCSTPIFG) == 0) {}             // Wait for data transmission to complete
+        UCB0IFG &= ~UCSTPIFG;                           // Clear flags
+
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Check Temperature Function for determining operation              */
+/*-------------------------------------------------------------------*/
+void checkTemp(void) {
+
+
+    if(temperature[4] == 1){                            // Check if temperature is negative
+        if(temperature[3] >= 2) {                       // Check if temperature is <= -20 degrees
+            if(temperature[2] >= 3) {                   // Check if temperature is <= -23 degrees
+                operation = 0;
+            } else if (temperature[2] == 2 && temperature[1] >= 5) {    // Check if temperature is <= -22.5 degrees
+                operation = 0;
+            } else {
+                operation = 1;
+            }
+        } else {
+            operation = 1;
+        }
+    } else {
+        operation = 1;                                  // If temperature is positive, continue normal operation
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Set Temperature Function for storing temp from RTC in packet      */
+/*-------------------------------------------------------------------*/
+void setTemp(void) {
+
+    int integer, fractional;                            // Get integer and fractional portions of temperature
+
+    switch(t2) {
+        case 0:
+            integer = Data_In & 0x7F;                   // Get lower 7 bits for integer
+            if(integer > 9){                            // If integer is greater than 9, break into tens and ones digits
+                temperature[2] = integer % 10;
+                temperature[3] = (integer - (integer % 10))/10;
+            } else {                                    // If integer is less than 1, store value in ones digit and set tens digit to zero
+                temperature[2] = integer;
+                temperature[3] = 0;
+            }
+            temperature[4] = (Data_In & 0x80) >> 7;     // Get MSB for sign bit
+            break;
+        case 1:
+            fractional = (Data_In & 0xC0) >> 6;         // Get upper 2 bits for fractional
+            switch(fractional){                         // Determine fraction portion
+                case 0:                                 // 00 -> XX.00
+                    temperature[0] = 0;
+                    temperature[1] = 0;
+                    break;
+                case 1:                                 // 01 -> XX.25
+                    temperature[0] = 5;
+                    temperature[1] = 5;
+                    break;
+                case 2:                                 // 10 -> XX.50
+                    temperature[0] = 0;
+                    temperature[1] = 5;
+                    break;
+                case 3:                                 // 11 -> XX.75
+                    temperature[0] = 5;
+                    temperature[1] = 7;
+                    break;
+                default:
+                    break;
+            }
+            break;
+        default:
+            break;
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Get Temperature Function for Reading RTC Temperature Registers    */
+/*-------------------------------------------------------------------*/
+void getTemp(void) {
+
+    int i;
+
+    UCB0TBCNT = 1;                                      // Set byte count for reading one byte at a time
+    write = 0;                                          // Indiciate reading from RTC
+    temp = 1;                                           // Indicate reading temperature from RTC
+
+    for(i = 0; i < 2; i++) {                            // Read both RTC temperature registers
 
         UCB0CTLW0 |= UCTR;                              // Set I2C to transmit to RTC (register address)
         UCB0CTLW0 |= UCTXSTT;                           // Send start message
@@ -477,6 +569,21 @@ void clearAlarm(void) {
 }
 
 /*-------------------------------------------------------------------*/
+/* Send Data Packet to transceiver                                   */
+/*-------------------------------------------------------------------*/
+void sendToBase(){
+
+    int i, j;
+
+    for(j = 0; j < sizeof(data); j++){
+        UCA0TXBUF = data[j];
+        for(j = 0; j < 1000; j++){}
+
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
 /* Main Function for Inializing and Waiting for Interrupts           */
 /*-------------------------------------------------------------------*/
 int main(void) {
@@ -491,6 +598,7 @@ int main(void) {
     init_startupTimer();                                // Intialize timer setting for sensor startup
     init_RTC();                                         // Initialize I2C settings for RTC communication
     init_BLE();                                         // Initialize UART1 settings for BLE communication
+    //init_Transceiver();                                 // Initialize UART0 settings for Transceiver communication
 
     PM5CTL0 &= ~LOCKLPM5;                               // Enable digital I/O
     UCA0CTLW0 &= ~UCSWRST;                              // Take out of software reset for UART0
@@ -506,34 +614,41 @@ int main(void) {
     __enable_interrupt();                               // Global IRQ enable
 
     getTime();                                          // Collect initial RTC date/time
+    getTemp();                                          // Collect initial RTC temperature
     clearAlarm();                                       // Start with Alarm 2 flag cleared in RTC Control Register
 
     int i;
 
     while(1){
 
-        if(set == 1) {                                  // Get date/time from RTC and clear Alarm 2 flag if it has been set
+        if(set == 1) {                                  // Get date/time and temperature from RTC and clear Alarm 2 flag if it has been set
             getTime();
+            getTemp();
             clearAlarm();
         }
 
-        if(collect == 1) {                              // Collect measurements if RTC indicates 15 minutes have passed
-            //delay();
-            //sensor_measurement();                     // Collect parent measurement
-            UCA1TXBUF = 0x23;                           // Send measurement request to BLE
-            for(i = 0; i < 1000; i++){}
-            UCA1IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
-            while(receiving < 5){                       // Wait to receive all 5 characters of measurement
-                UCA1IFG &= ~UCRXIFG;                    // Clear UART1 RX flag
-                while(received == 0){}                  // Wait to receive a character
-                received = 0;                           // Reset character received indicator
+        if(collect == 1) {                                  // Collect measurements if RTC indicates 15 minutes have passed
+            checkTemp();
+            if(operation == 1){
+                sensor_measurement();                       // Collect parent measurement
+                UCA1TXBUF = 0x23;                           // Send measurement request to BLE
+                for(i = 0; i < 1000; i++){}
+                UCA1IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
+                while(receiving < 5){                       // Wait to receive all 5 characters of measurement
+                    UCA1IFG &= ~UCRXIFG;                    // Clear UART1 RX flag
+                    while(received == 0){}                  // Wait to receive a character
+                    received = 0;                           // Reset character received indicator
+                }
+                UCA1IE &= ~UCRXIE;                          // Disable UART1 RX interrupt
+                store_measurement();                        // Store received measurement
+                hexToDecimal();                             // Format data packet for sending to base
+
+                // Snowfall computation?? Average measurements from all 3 before sending to base??
+
+                sendToBase();                               // Send data packet to base
+                receiving = 0;                              // Reset receiving state indicator for measurement reception
             }
-            UCA1IE &= ~UCRXIE;                          // Disable UART1 RX interrupt
-            store_measurement();                        // Store received measurement
-            hexToDecimal();
-            sendToBase();
-            receiving = 0;                              // Reset receiving state indicator for measurement reception
-            collect = 0;                                // Clear measurement collection indicator
+            collect = 0;                                    // Clear measurement collection indicator
         }
 
     }
@@ -602,18 +717,31 @@ __interrupt void EUSCI_B0_I2C_ISR(void){
         switch(UCB0IV) {                                                // Determine if transmitting address or receiving data
             case 0x16:
                 Data_In = UCB0RXBUF;                                    // Place received data from buffer in temporary variable
-                setTime();                                              // Use data to update time packet
-                if(t1 == 6) {                                           // Reset register counter to 0 after all 6 date/time registers have been read from
-                    t1 = 0;
-                } else {                                                // Increase register counter to read from next date/time register
-                    t1 = t1 + 1;
-                    if(t1 == 3) {                                       // Skip reading RTC Register at 0x03 (ignore Day of Week)
+                if(temp == 0){                                          // Functionality for reading time
+                    setTime();                                          // Use data to update time packet
+                    if(t1 == 6) {                                       // Reset register counter to 0 after all 6 date/time registers have been read from
+                        t1 = 0;
+                    } else {                                            // Increase register counter to read from next date/time register
                         t1 = t1 + 1;
+                        if(t1 == 3) {                                   // Skip reading RTC Register at 0x03 (ignore Day of Week)
+                            t1 = t1 + 1;
+                        }
+                    }
+                } else if (temp == 1) {                                 // Functionality for reading temperature
+                    setTemp();                                          // Use data to update temperature packet
+                    if(t2 == 2) {                                       // Reset register counter to 0 after both temperature registers have been read from
+                        t2 = 0;
+                    } else {                                            // Increase register counter to read from next temperature register
+                        t2 = t2 + 1;
                     }
                 }
                 break;
             case 0x18:
-                UCB0TXBUF = t1;                                         // Transmit address to read from
+                if(temp == 0){                                          // Determine if reading time or temperature
+                    UCB0TXBUF = t1;                                     // Transmit time register address to read from
+                } else if (temp == 1){
+                    UCB0TXBUF = t2 + 17;                                // Transmit temp register address to read from
+                }
                 break;
         }
     }
@@ -636,6 +764,7 @@ __interrupt void PORT3_ISR(void){
         collect = 1;
     }*/
 
+    // Collect measurement every 1 minute
     count = 0;
     collect = 1;                                                        // Set measurement collection indicator
 

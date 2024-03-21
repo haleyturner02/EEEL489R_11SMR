@@ -17,7 +17,11 @@ volatile int sensor_value;                                                      
 volatile int wait = 0;                                                                          // Indicator for sensor startup time
 volatile int start = 0;                                                                         // Indicator for pulse start/end
 int snowfall = 0;                                                                               // Indicator for new snowfall
+int snowfallValue = 0;                                                                          // Value for new snowfall
 int prev_measurements[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                                 // Array for storing previous 12 measurements
+int calibrationDistance;
+int calibrationButton = 0;                                                                      // Indicator for sensor calibration
+int firstMeasurement = 1;                                                                       // Indicator for first measurement (used for calibration)
 
 /* RTC Global Variables */
 volatile unsigned int t1 = 0;                                                                   // Value for reading time/date and storing in packet
@@ -43,14 +47,15 @@ int temperature[] = {0, 0, 0, 0, 0};                                            
 /* BLE UART1 Global Variables */
 volatile unsigned int receiving = 0;                                                            // Receiving state indicator (for measurement)
 volatile unsigned int received = 0;                                                             // Character received indicator
-volatile unsigned char receive_data [] = {0x3C, 0x00, 0x00, 0x00, 0x3E};                        // Packet for received measurement
+volatile unsigned char receive_data [] = {0x3C, 0x30, 0x30, 0x30, 0x3E};                        // Packet for received measurement
 // Packet Format: {'<', hex1, hex2, hex3, '>'}
-// Packet Example: 0x237 -> {0x3C, 0x32, 0x33, 0x37, 0x3D}
+// Packet Example: 0x23A -> {0x3C, 0x32, 0x33, 0x3A, 0x3D}
 
 /* Transceiver UART0 Global Variables */
-unsigned char data[] = {0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};                        // Packet for data to send to base station
-// Packet Format: {id, min1, min2, hour1, hour2, hundreds, tens, ones}
-// Packet Example: Cluster #1 at 13:46 with measurement of 12cm -> {0x31, 0x36, 0x34, 0x33, 0x31, 0x30, 0x31, 0x32}
+unsigned char clusterID = 0x31;                                                                 // Cluster ID
+volatile unsigned char data[] = {0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};    // Packet for data to send to base station
+// Packet Format: {id, min1, min2, hour1, hour2, tens (parent), ones (parent), decimal, tenths (parent), tens (child 1), ones (child 1), decimal, tenths (child 1), tens (child 2), ones (child 2), decimal, tenths (child 2)}
+// Packet Example: Cluster #1 at 13:46 with measurement of 3.1in (parent), 2.9 (child 1), and 3.4 (child 2) -> {0x31, 0x36, 0x34, 0x33, 0x31, 0x30, 0x33, 0x2E, 0x31, 0x30, 0x32, 0x2E, 0x39, 0x30, 0x33, 0x3E, 0x34}
 
 /*-------------------------------------------------------------------*/
 /* Calibration Button Initialization                                 */
@@ -58,7 +63,6 @@ unsigned char data[] = {0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};        
 void init_button(void){
 
     P1DIR &= ~BIT1;                                 // Set P1.1 (button) as input
-    // Pull up/down resistor -> not necessary due to resistor on PCB??
     P1IES &= ~BIT1;                                 // Low to High Sensitivity for button
 
 }
@@ -73,10 +77,6 @@ void init_sensor(void) {
     P2REN |= BIT2;                                      // Enable pull up/down resistors
     P2OUT |= BIT2;                                      // Set as pull up resistor
     P2IES &= ~BIT2;                                     // Low to High Sensitivity for PWM
-
-    // Power Pin Setup
-    //P2DIR |= BIT6;                                    // Set P2.6 (Power) as output
-    //P2OUT |= BIT6;                                    // Start on (measuring)
 
 }
 
@@ -200,7 +200,6 @@ void sensor_measurement(void) {
         P2IE  |=  BIT2;                                             // Enable IRQ for PWM I/O pin
         P2IFG &= ~BIT2;                                             // Clear flags for PWM I/O pin
 
-        // Getting stuck here
         while(start == 0){}                                         // Wait for start of pulse
 
         P2IES |= BIT2;                                              // HIGH to LOW sensitivity
@@ -251,8 +250,6 @@ void sensor_measurement(void) {
     int median;
 
     a = 0;
-    //int x;
-    //int total_value = 0;
 
     while(a < 10){                                                  // Go through array 10 times
     prevCount=duplicateCount;                                       // Store previous count of duplicates
@@ -282,83 +279,25 @@ void sensor_measurement(void) {
 
     sensor_value = filter_value;                                    // Set selected value (median or mode) as sensor measurement to store/send
 
-    int n;
-
-    for(n = 11; n > 0; n--) {                                       // Shift previous measurement array
-        prev_measurements[n] = prev_measurements[n-1];
-    }
-
-    prev_measurements[0] = sensor_value;                            // Store newest measurement
-
 }
 
 /*-------------------------------------------------------------------*/
-/* Function for converting and storing received measurement          */
+/* Function for Computing New Snowfall from Previous Measurements    */
 /*-------------------------------------------------------------------*/
-void store_measurement(void) {
-
-   unsigned int i, m, s;                            // Variables for mapping char data to int measurement (i=0 -> m hundreds, i=1 -> m tens, i=2 -> m ones)
-   m = 0;                                           // Start measurement value at 0
-
-   for(i = 0; i < 3; i++) {                         // Convert all 3 characters received and add to measurement sum
-       switch(i) {                                  // Getting scaling factor for char data based on position in received_data
-           case 0:                                  // First received character corresponds to hundreds place
-               s = 100;
-               break;
-           case 1:                                  // Second received character corresponds to tens place
-               s = 10;
-               break;
-           case 2:                                  // Third received character corresponds to ones place
-               s = 1;
-               break;
-           default:
-               break;
-       }
-
-       switch(receive_data[i+1]) {                   // Convert ASCII character code to integer and add to measurement sum
-           case 0x30:
-              m = m + 0;
-              break;
-           case 0x31:
-               m = m + 1*s;
-               break;
-           case 0x32:
-               m = m + 2*s;
-               break;
-           case 0x33:
-               m = m + 3*s;
-               break;
-           case 0x34:
-               m = m + 4*s;
-               break;
-           case 0x35:
-               m = m + 5*s;
-               break;
-           case 0x36:
-               m = m + 6*s;
-               break;
-           case 0x37:
-               m = m + 7*s;
-               break;
-           case 0x38:
-               m = m + 8*s;
-               break;
-           case 0x39:
-               m = m + 9*s;
-               break;
-           default:
-               break;
-       }
-
-   }
-
-   int n;
-
-   for(n = 11; n > 0; n--) {                                    // Shift previous measurement array
-       prev_measurements[n] = prev_measurements[n-1];
-   }
-
-   prev_measurements[0] = m;                                    // Store newest measurement
+void snowfallCompute(void){
+    int n;
+    if (firstMeasurement == 1 || calibrationButton == 1){
+        calibrationDistance = sensor_value;                         // Store sensor measurement in calibration distance
+        prev_measurements[0] = calibrationDistance;                 // Store calibration distance in first measurement (for future snowfall computations)
+        calibrationButton = 0;                                      // Clear calibration button indicator
+        firstMeasurement = 0;                                       // Clear first measurement indicator
+    } else {
+        snowfallValue = prev_measurements[0] - sensor_value;        // Compare current sensor value to the last sensor value
+        for (n = (sizeof(prev_measurements)-1); n > 0; n--){        // Shift previous measurement array to get rid of old values
+            prev_measurements[n] = prev_measurements[n-1];
+        }
+        prev_measurements[0] = sensor_value;                        // Store newest sensor value
+    }
 
 }
 
@@ -367,7 +306,7 @@ void store_measurement(void) {
 /*-------------------------------------------------------------------*/
 void hexToDecimal(){                                            // Converts received hex number (from BLE) into decimal value and formats data packet for transceiver
 
-    int hundreds, tens, ones, decimal;
+    int hundreds, tens, ones, decimal;                        // Need to fix
 
     hundreds = ((int) receive_data[1])-48;                      // Get hundreds digit
     tens = ((int) receive_data[2])-48;                          // Get tens digit
@@ -392,6 +331,75 @@ void hexToDecimal(){                                            // Converts rece
 
     data[7] = ones + 48;
 
+    sensor_value = decimal;
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Conversion from cm to in                                          */
+/*-------------------------------------------------------------------*/
+void cmToIn(int device){
+
+    int n;
+    unsigned long centimeters, inches;                      // Could use two longs (32 bits) for better precision potentially
+
+    centimeters = snowfallValue;
+
+    if(device == 0) {                                       // Parent Measurement indexing
+        n = 0;
+    } else if (device == 1) {                               // Child #1 Measurement indexing
+        n = 4;
+    } else if (device == 2) {                               // Child #2 Measurement indexing
+        n = 8;
+    }
+
+    data[0] = clusterID;                                    // Include cluster ID in data packet
+    data[n+7] = 0x2E;                                       // Include decimal point in data packet
+
+    // Place individual digits in data for base (tens -> data1[5], ones -> data1[6], tenths -> data[8])
+
+    if(centimeters < 17) {                                 // For measurements <= 16 centimeters, use scale of 1000 (precision to tenths place)
+        inches = ((3937*centimeters)-((3937*centimeters)%1000))/1000; // Mod 100?
+
+        if (inches > 9) {                                   // 2 digits (ones, tenths)
+            data[n+5] = 0x30;
+            data[n+6] = ((inches - (inches % 10))/10) + 48;
+            data[n+8] = (inches - (inches - (inches % 10))) + 48;
+            snowfall = 1;
+        } else if (inches > 0) {                            // 1 digit (tenths)
+            data[n+5] = 0x30;
+            data[n+6] = 0x30;
+            data[n+8] = inches + 48;
+            snowfall = 1;
+        } else {                                            // No new snowfall
+            data[n+5] = 0x30;
+            data[n+6] = 0x30;
+            data[n+7] = 0x30;
+        }
+    } else if (centimeters < 167) {                        // For measurements <= 166, use scale of 100 (0.394 -> 394)
+
+        inches = (394*centimeters) - ((394*centimeters)%10);
+
+        if(inches > 9999) {
+            inches = ((394*centimeters)-((394*centimeters)%10))/100;
+        } else {
+            inches = ((394*centimeters)-((394*centimeters)%100))/100;
+        }
+
+        if(inches > 99) {                                   // 3 digits (tens, ones, tenths)
+            data[n+5] = ((inches - (inches % 100))/100) + 48;
+            data[n+6] = (((inches % 100) - (inches % 100) % 10)/10) + 48;
+            data[n+8] = ((inches % 100) % 10) + 48;
+        } else {                                            // 2 digits (ones, tenths)
+            data[n+5] = 0x30;
+            data[n+6] = ((inches - (inches % 10))/10) + 48;
+            data[n+8] = (inches % 10) + 48;
+        }
+
+        snowfall = 1;
+
+    }
+
 }
 
 /*-------------------------------------------------------------------*/
@@ -402,8 +410,8 @@ void sendToBase(){
     int i, j;
 
     for(j = 0; j < sizeof(data); j++){
-        UCA0TXBUF = data[j];
-        for(j = 0; j < 1000; j++){}
+        UCA0TXBUF = data[j];                                // Send each value in data packet to transceiver to transmit to base
+        for(i = 0; i < 1000; i++){}
 
     }
 
@@ -657,11 +665,12 @@ int main(void) {
 
     __enable_interrupt();                               // Global IRQ enable
 
-    //getTime();                                          // Collect initial RTC date/time
-    //getTemp();                                          // Collect initial RTC temperature
-    //clearAlarm();                                       // Start with Alarm 2 flag cleared in RTC Control Register
+    getTime();                                          // Collect initial RTC date/time
+    getTemp();                                          // Collect initial RTC temperature
+    clearAlarm();                                       // Start with Alarm 2 flag cleared in RTC Control Register
 
     int i;
+
 
     while(1){
 
@@ -675,7 +684,14 @@ int main(void) {
         if(collect == 1) {                                  // Collect measurements if RTC indicates 15 minutes have passed
             checkTemp();
             if(operation == 1){
-                sensor_measurement();                       // Collect parent measurement
+
+                // Collect and store Parent Measurement
+                sensor_measurement();                       // Collect parent measurement (sets sensor_value)
+                snowfallCompute();                          // Compute snowfall
+                cmToIn(0);                                  // Convert Parent snowfall from cm to in
+
+
+                // Collect Children Measurements
                 UCA1TXBUF = 0x23;                           // Send measurement request to BLE
                 for(i = 0; i < 1000; i++){}
                 UCA1IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
@@ -685,15 +701,17 @@ int main(void) {
                     received = 0;                           // Reset character received indicator
                 }
                 UCA1IE &= ~UCRXIE;                          // Disable UART1 RX interrupt
-                store_measurement();                        // Store received measurement
-                hexToDecimal();                             // Format data packet for sending to base
 
-                // Snowfall computation?? Average measurements from all 3 before sending to base??
-                // Set snowfall indicator in snowfall computation function
+                // Store Child Measurement
+                hexToDecimal();                             // Convert received hex measurement to decimal measurement (sets sensor_value)
+                snowfallCompute();                          // Compute snowfall
+                cmToIn(1);                                  // Convert Child #1 snowfall from cm to in
 
+                // Send New Snowfall to Base Station
                 if(snowfall == 1){                          // Determine if new snowfall has occurred
                     sendToBase();                           // Send data packet to base
                 }
+
                 receiving = 0;                              // Reset receiving state indicator for measurement reception
             }
             collect = 0;                                    // Clear measurement collection indicator
@@ -855,7 +873,11 @@ __interrupt void EUSCI_A1_RX_ISR(void) {
 #pragma vector = PORT1_VECTOR
 __interrupt void PORT1_ISR(void){
 
-    P1IE &= ~BIT1;                                                      // Disable IRQ after calibration (maybe?)
+    calibrationButton = 1;                                              // Set indicator for button press
+    firstMeasurement = 1;                                               // Set indicator for first measurement
+
+    snowfallCompute();                                                  // Calibrate sensor upon button press
+
     P1IFG &= ~BIT1;                                                     // Clear flags for button
 
 }

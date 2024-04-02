@@ -6,21 +6,17 @@
 
 #include <msp430.h> 
 
-/*-------------------------------------------------------------------*/
-/* Variable Definitions for Getting Measurement                      */
-/*-------------------------------------------------------------------*/
-
 /* Sensor Global Variables */
-volatile int cycles;                                                                            // Cycle counter for pulse measuring
-volatile int measurement_array[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                              // Array for collecting 10 measurements
-volatile int sensor_value;                                                                      // Sensor measurement
-volatile int wait = 0;                                                                          // Indicator for sensor startup time
-volatile int start = 0;                                                                         // Indicator for pulse start/end
+volatile int cycles;                                                            // Cycle counter for pulse measuring
+volatile int measurement_array[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};              // Array for collecting 10 measurements
+volatile int sensor_value;                                                      // Sensor measurement
+volatile int wait = 0;                                                          // Indicator for sensor startup time
+volatile int start = 0;                                                         // Indicator for pulse start/end
 
-/* BLE UART Global Variables */
-volatile unsigned int received = 0;                                                             // Character received indicator
-volatile unsigned char receive_data = 0x00;                                                     // Character received
-volatile unsigned char measurement[] = {0x3C, 0x00, 0x00, 0x00, 0x3E};                          // Packet for measurement transmission
+volatile unsigned int position = 0;
+volatile unsigned int received = 0;
+volatile unsigned char receive_data = 0x00;
+
 
 /*-------------------------------------------------------------------*/
 /* Sensor I/O Initialization                                         */
@@ -34,8 +30,8 @@ void init_sensor(void) {
     P2IES &= ~BIT7;                 // Low to High Sensitivity for PWM
 
     // Power Pin Setup
-    P2DIR |= BIT6;                  // Set P2.6 (Power) as output
-    P2OUT |= BIT6;                  // Start on (measuring)
+    //P2DIR |= BIT6;                  // Set P2.6 (Power) as output
+    //P2OUT |= BIT6;                  // Start on (measuring)
 
 }
 
@@ -199,155 +195,55 @@ void sensor_measurement(void) {
 }
 
 /*-------------------------------------------------------------------*/
-/* Format Packet with New Measurement                                */
-/*-------------------------------------------------------------------*/
-void format_packet(){
-
-    int hundreds, tens, ones, temp;
-
-    temp = sensor_value;
-
-    if(temp > 99){
-        hundreds = sensor_value - (sensor_value % 100);
-    } else {
-        hundreds = 0;
-    }
-
-    temp = temp - hundreds;
-
-    if(temp > 9){
-        tens = (sensor_value % 100) - (sensor_value % 10);
-    } else {
-        tens = 0;
-    }
-
-    temp = temp - tens;
-    ones = temp;
-
-    switch(hundreds){
-        case 0:
-            measurement[1] = 0x30;
-            break;
-        case 100:
-            measurement[1] = 0x31;
-            break;
-        case 200:
-            measurement[1] = 0x32;
-            break;
-        case 300:
-            measurement[1] = 0x33;
-            break;
-        case 400:
-            measurement[1] = 0x34;
-            break;
-        case 500:
-            measurement[1] = 0x35;
-            break;
-        case 600:
-            measurement[1] = 0x36;
-            break;
-        case 700:
-            measurement[1] = 0x37;
-            break;
-        default:
-            measurement[1] = 0x00;
-            break;
-
-    }
-
-    switch(tens){
-        case 0:
-            measurement[2] = 0x30;
-            break;
-        case 10:
-            measurement[2] = 0x31;
-            break;
-        case 20:
-            measurement[2] = 0x32;
-            break;
-        case 30:
-            measurement[2] = 0x33;
-            break;
-        case 40:
-            measurement[2] = 0x34;
-            break;
-        case 50:
-            measurement[2] = 0x35;
-            break;
-        case 60:
-            measurement[2] = 0x36;
-            break;
-        case 70:
-            measurement[2] = 0x37;
-            break;
-        case 80:
-            measurement[2] = 0x38;
-            break;
-        case 90:
-            measurement[2] = 0x39;
-            break;
-        default:
-            measurement[2] = 0x00;
-            break;
-    }
-
-    measurement[3] = ((unsigned char) ones) + 48;
-
-}
-
-/*-------------------------------------------------------------------*/
 /* Send Measurement to BLE via UART0                                 */
 /*-------------------------------------------------------------------*/
 void send_measurement(){
 
-    int i, j, n;
+    int i;
 
-    for(j = 0; j < 3; j++){
-
-        for(n = 0; n < sizeof(measurement); n++){
-            UCA0TXBUF = measurement[n];
-            for(i = 0; i < 1000; i++){}
-        }
-    }
+    UCA0TXBUF = sensor_value;
+    for(i = 0; i < 1000; i++){}
 
 }
 
 /*-------------------------------------------------------------------*/
 /* Main Function for Inializing and Waiting for Interrupts           */
 /*-------------------------------------------------------------------*/
-int main(void) {
+int main(void){
+    WDTCTL = WDTPW | WDTHOLD;   // stop watchdog timer
+    UCA0CTLW0 |= UCSWRST;       // Put into software reset
 
-    WDTCTL = WDTPW | WDTHOLD;                           // Stop watchdog timer
-    UCA0CTLW0 |= UCSWRST;                               // Put into software reset for UART0
-
-    init_sensor();                                      // Initialize I/O settings for sensor
-    init_sensorTimer();                                 // Initialize timer settings for PWM measurement
-    init_startupTimer();                                // Intialize timer setting for sensor startup
+    init_sensor();                  // Initialize I/O settings for sensor
+    init_sensorTimer();             // Initialize timer settings for PWM measurement
+    init_startupTimer();            // Intialize timer setting for sensor startup
     init_BLE();
 
-    PM5CTL0 &= ~LOCKLPM5;                               // Enable digital I/O
-    UCA0CTLW0 &= ~UCSWRST;                              // Take out of software reset for UART0
+    UCA0CTLW0 &= ~UCSWRST;
+    PM5CTL0 &= ~LOCKLPM5;       // Enable digital I/O
 
-    UCA0IE |= UCRXIE;                                   // Enable UART0 RX interrupt
+     __enable_interrupt();      // Global IRQ enable
 
-    __enable_interrupt();                               // Global IRQ enable
+    //delay();
 
-    delay();
+    int i;
 
     while(1){
 
+        UCA0IE |= UCRXIE;
         UCA0IFG &= ~UCRXIFG;
         while(received == 0){}
         received = 0;
+        UCA0IE &= ~UCRXIE;
 
         if(receive_data == 0x23){
-            UCA0IE &= ~UCRXIE;
-            sensor_measurement();
-            format_packet();
+            //sensor_measurement();
+            if(sensor_value > 255){
+                sensor_value = 0;
+            }
             send_measurement();
-            UCA0IE |= UCRXIE;
             receive_data = 0x00;
         }
+
 
     }
 
@@ -373,7 +269,7 @@ __interrupt void ISR_PWM(void){
         TB0CCTL0 |= CCIS__GND;
     }
 
-    P2IFG &= ~BIT2;                     // Clear interrupt flag
+    P2IFG &= ~BIT7;                     // Clear interrupt flag
 
 }
 

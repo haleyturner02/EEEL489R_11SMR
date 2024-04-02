@@ -52,10 +52,11 @@ volatile unsigned char receive_data [] = {0x3C, 0x30, 0x30, 0x30, 0x3E};        
 // Packet Example: 0x23A -> {0x3C, 0x32, 0x33, 0x3A, 0x3D}
 
 /* Transceiver UART0 Global Variables */
-unsigned char clusterID = 0x31;                                                                 // Cluster ID
-volatile unsigned char data[] = {0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};    // Packet for data to send to base station
-// Packet Format: {id, min1, min2, hour1, hour2, tens (parent), ones (parent), decimal, tenths (parent), tens (child 1), ones (child 1), decimal, tenths (child 1), tens (child 2), ones (child 2), decimal, tenths (child 2)}
-// Packet Example: Cluster #1 at 13:46 with measurement of 3.1in (parent), 2.9 (child 1), and 3.4 (child 2) -> {0x31, 0x36, 0x34, 0x33, 0x31, 0x30, 0x33, 0x2E, 0x31, 0x30, 0x32, 0x2E, 0x39, 0x30, 0x33, 0x3E, 0x34}
+unsigned char clusterID = 0x01;                                                                 // Cluster ID
+volatile unsigned char data[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+// Packet Format: {clusterID, minutes, hours, measurement (parent), measurement (child #1), measurement (child #2)}
+// Packet Example: Cluster #1 at 13:46 with measurement of 3.1 in (parent), 2.9 in (child #1), 3.4 in (child #2) {0x01, 0x2E, 0x0D, 0x1F, 0x1D, 0x22}
+
 
 /*-------------------------------------------------------------------*/
 /* Calibration Button Initialization                                 */
@@ -148,6 +149,8 @@ void init_BLE() {
     P4SEL1 &= ~BIT3;                                    // Set P4.3 UART A1 TX
     P4SEL0 |= BIT3;
 
+    P6DIR &= ~BIT2;                                     // Set P6.2 Reset
+
 }
 
 /*-------------------------------------------------------------------*/
@@ -177,6 +180,7 @@ void delay(void) {
     TB1CCTL0 &= ~CCIFG;                                 // Clear flags for Timer B1 CCR0
 
     while(wait == 0) {}                                 // Wait for timer to indicate enough time has passed
+    wait = 0;
 
     TB1CCTL0 &= ~CCIE;                                  // Disable TimerB1 IRQ
     TB1CCTL0 &= ~CCIFG;                                 // Clear flags for Timer B1 CCR0
@@ -286,6 +290,10 @@ void sensor_measurement(void) {
 /*-------------------------------------------------------------------*/
 void snowfallCompute(void){
     int n;
+
+    firstMeasurement = 0;
+    prev_measurements[0] = 190;
+
     if (firstMeasurement == 1 || calibrationButton == 1){
         calibrationDistance = sensor_value;                         // Store sensor measurement in calibration distance
         prev_measurements[0] = calibrationDistance;                 // Store calibration distance in first measurement (for future snowfall computations)
@@ -302,40 +310,6 @@ void snowfallCompute(void){
 }
 
 /*-------------------------------------------------------------------*/
-/* Formatting for sending final data to base                         */
-/*-------------------------------------------------------------------*/
-void hexToDecimal(){                                            // Converts received hex number (from BLE) into decimal value and formats data packet for transceiver
-
-    int hundreds, tens, ones, decimal;                        // Need to fix
-
-    hundreds = ((int) receive_data[1])-48;                      // Get hundreds digit
-    tens = ((int) receive_data[2])-48;                          // Get tens digit
-    ones = ((int) receive_data[3])-48;                          // Get ones digit
-
-    hundreds = hundreds * 256;                                  // Perform conversion for hundreds place
-    tens = tens * 16;                                           // Perform conversion for tens place
-
-    decimal = hundreds + tens + ones;                           // Sum three values together for decimal value
-
-    if(decimal > 99){                                           // Place each digit of decimal value into character data array
-        data[5] = ((decimal - (decimal % 100))/100) + 48;
-    } else {
-        data[5] = 0x30;
-    }
-
-    if((decimal % 100) > 9){
-        data[6] = (((decimal % 100)-ones)/10) + 48;
-    } else {
-        data[6] = 0x30;
-    }
-
-    data[7] = ones + 48;
-
-    sensor_value = decimal;
-
-}
-
-/*-------------------------------------------------------------------*/
 /* Conversion from cm to in                                          */
 /*-------------------------------------------------------------------*/
 void cmToIn(int device){
@@ -346,56 +320,31 @@ void cmToIn(int device){
     centimeters = snowfallValue;
 
     if(device == 0) {                                       // Parent Measurement indexing
-        n = 0;
+        n = 3;
     } else if (device == 1) {                               // Child #1 Measurement indexing
         n = 4;
     } else if (device == 2) {                               // Child #2 Measurement indexing
-        n = 8;
+        n = 5;
     }
 
     data[0] = clusterID;                                    // Include cluster ID in data packet
-    data[n+7] = 0x2E;                                       // Include decimal point in data packet
+    data[1] = time[3]*10 + time[2];                         // Include min in data packet
+    data[2] = time[5]*10 + time[4];                         // Include hour in data packet
+
 
     // Place individual digits in data for base (tens -> data1[5], ones -> data1[6], tenths -> data[8])
 
     if(centimeters < 17) {                                 // For measurements <= 16 centimeters, use scale of 1000 (precision to tenths place)
         inches = ((3937*centimeters)-((3937*centimeters)%1000))/1000; // Mod 100?
-
-        if (inches > 9) {                                   // 2 digits (ones, tenths)
-            data[n+5] = 0x30;
-            data[n+6] = ((inches - (inches % 10))/10) + 48;
-            data[n+8] = (inches - (inches - (inches % 10))) + 48;
+        data[n] = inches;
+        if(inches > 0) {
             snowfall = 1;
-        } else if (inches > 0) {                            // 1 digit (tenths)
-            data[n+5] = 0x30;
-            data[n+6] = 0x30;
-            data[n+8] = inches + 48;
-            snowfall = 1;
-        } else {                                            // No new snowfall
-            data[n+5] = 0x30;
-            data[n+6] = 0x30;
-            data[n+7] = 0x30;
         }
+
     } else if (centimeters < 167) {                        // For measurements <= 166, use scale of 100 (0.394 -> 394)
 
-        inches = (394*centimeters) - ((394*centimeters)%10);
-
-        if(inches > 9999) {
-            inches = ((394*centimeters)-((394*centimeters)%10))/100;
-        } else {
-            inches = ((394*centimeters)-((394*centimeters)%100))/100;
-        }
-
-        if(inches > 99) {                                   // 3 digits (tens, ones, tenths)
-            data[n+5] = ((inches - (inches % 100))/100) + 48;
-            data[n+6] = (((inches % 100) - (inches % 100) % 10)/10) + 48;
-            data[n+8] = ((inches % 100) % 10) + 48;
-        } else {                                            // 2 digits (ones, tenths)
-            data[n+5] = 0x30;
-            data[n+6] = ((inches - (inches % 10))/10) + 48;
-            data[n+8] = (inches % 10) + 48;
-        }
-
+        inches = ((394*centimeters) - ((394*centimeters)%10))/100;
+        data[n] = inches;
         snowfall = 1;
 
     }
@@ -409,8 +358,14 @@ void sendToBase(){
 
     int i, j;
 
+    getTime();
+
+    data[0] = clusterID;                                    // Include cluster ID in data packet
+    data[1] = time[3]*10 + time[2];                         // Include min in data packet
+    data[2] = time[5]*10 + time[4];                         // Include hour in data packet
+
     for(j = 0; j < sizeof(data); j++){
-        UCA0TXBUF = data[j];                                // Send each value in data packet to transceiver to transmit to base
+        UCA0TXBUF = data[j] + 48;                                // Send each value in data packet to transceiver to transmit to base
         for(i = 0; i < 1000; i++){}
 
     }
@@ -427,13 +382,9 @@ void checkTime(void) {
         if(snowfall == 1) {                                 // Snowfall has occurred within past 24 hours, base station update not necessary
             snowfall = 0;                                   // Reset snowfall indicator for next 24 hours
         } else if (snowfall == 0) {                         // No new snowfall in past 24 hours
-            data[1] = time[2];                              // Set data packet time
-            data[2] = time[3];
-            data[3] = time[4];
-            data[4] = time[5];
-            data[5] = 0x30;                                 // Set measurement values to 0 to indicate no new snowfall occurrence
-            data[6] = 0x30;
-            data[7] = 0x30;
+            data[3] = 0x00;
+            data[4] = 0x00;
+            data[5] = 0x00;
             sendToBase();                                   // Send update to base
         }
 
@@ -453,15 +404,11 @@ void setTime(void) {
            break;
         case 1:
             time[2] = Data_In & 0x0F;                   // Get lower nibble for min1 (one's place of minutes)
-            data[1] = time[2];
             time[3] = (Data_In & 0x70) >> 4;            // Get upper nibble (not including MSB) for min2 (ten's place of minutes)
-            data[2] = time[3];
             break;
         case 2:
             time[4] = Data_In & 0x0F;                   // Get lower nibble for hour1 (one's place of hour)
-            data[3] = time[4];
             time[5] = (Data_In & 0x30) >> 4;            // Get bit 5 for hour2 (ten's place of hour)
-            data[4] = time[5];
             break;
         case 4:
             time[6] = Data_In & 0x0F;                   // Get lower nibble for day1 (one's place of day)
@@ -616,7 +563,6 @@ void getTemp(void) {
 /*-------------------------------------------------------------------*/
 void clearAlarm(void) {
 
-
     UCB0TBCNT = sizeof(reset);                          // Set byte count to size of reset packet
     write = 1;                                          // Indicate writing to RTC
 
@@ -639,7 +585,7 @@ int main(void) {
     WDTCTL = WDTPW | WDTHOLD;                           // Stop watchdog timer
     UCA0CTLW0 |= UCSWRST;                               // Put into software reset for UART0
     UCA1CTLW0 |= UCSWRST;                               // Put into software reset for UART1
-    UCB0CTLW0 |= UCSWRST;                               // Take out of software reset for I2C
+    UCB0CTLW0 |= UCSWRST;                               // Put into software reset for I2C
 
     init_button();
     init_sensor();                                      // Initialize I/O settings for sensor
@@ -647,7 +593,7 @@ int main(void) {
     init_startupTimer();                                // Intialize timer setting for sensor startup
     init_RTC();                                         // Initialize I2C settings for RTC communication
     init_BLE();                                         // Initialize UART1 settings for BLE communication
-    //init_Transceiver();                                 // Initialize UART0 settings for Transceiver communication
+    init_Transceiver();                                 // Initialize UART0 settings for Transceiver communication
 
     PM5CTL0 &= ~LOCKLPM5;                               // Enable digital I/O
     UCA0CTLW0 &= ~UCSWRST;                              // Take out of software reset for UART0
@@ -655,7 +601,7 @@ int main(void) {
     UCB0CTLW0 &= ~UCSWRST;                              // Take out of software reset for I2C
 
     /* Enable interrupts */
-    UCB0IE |= UCTXIE0 | UCRXIE0;;                       // Interrupt enable for I2C TX0
+    UCB0IE |= UCTXIE0 | UCRXIE0;;                       // Interrupt enable for I2C
 
     P1IE |= BIT1;                                       // Enable IRQ for button calibration
     P1IFG &= ~BIT1;                                     // Clear flags for button
@@ -671,50 +617,59 @@ int main(void) {
 
     int i;
 
-
     while(1){
 
         if(set == 1) {                                      // Get date/time and temperature from RTC and clear Alarm 2 flag if it has been set
             getTime();
-            getTemp();
-            checkTime();                                    // Check if base station update is needed
             clearAlarm();
-        }
+            checkTime();                                    // Check if base station update is needed
 
-        if(collect == 1) {                                  // Collect measurements if RTC indicates 15 minutes have passed
-            checkTemp();
-            if(operation == 1){
+            if(collect == 1) {                                  // Collect measurements if RTC indicates 15 minutes have passed
 
-                // Collect and store Parent Measurement
-                sensor_measurement();                       // Collect parent measurement (sets sensor_value)
-                snowfallCompute();                          // Compute snowfall
-                cmToIn(0);                                  // Convert Parent snowfall from cm to in
-
-
-                // Collect Children Measurements
-                UCA1TXBUF = 0x23;                           // Send measurement request to BLE
-                for(i = 0; i < 1000; i++){}
-                UCA1IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
-                while(receiving < 5){                       // Wait to receive all 5 characters of measurement
-                    UCA1IFG &= ~UCRXIFG;                    // Clear UART1 RX flag
-                    while(received == 0){}                  // Wait to receive a character
-                    received = 0;                           // Reset character received indicator
-                }
-                UCA1IE &= ~UCRXIE;                          // Disable UART1 RX interrupt
-
-                // Store Child Measurement
-                hexToDecimal();                             // Convert received hex measurement to decimal measurement (sets sensor_value)
-                snowfallCompute();                          // Compute snowfall
-                cmToIn(1);                                  // Convert Child #1 snowfall from cm to in
-
-                // Send New Snowfall to Base Station
-                if(snowfall == 1){                          // Determine if new snowfall has occurred
-                    sendToBase();                           // Send data packet to base
+                P6DIR |= BIT2;                                  // Set P6.2 to output for BLE reset
+                P6OUT |= BIT2;                                  // Set P6.2 HIGH for active high reset
+                for(i = 0; i < 1000; i++){}                     // Small delay to wait for reset
+                P6DIR &= ~ BIT2;                                //
+                for(i = 0; i < 10; i++) {
+                    delay();
                 }
 
-                receiving = 0;                              // Reset receiving state indicator for measurement reception
+                getTemp();                                      // Collect temperature reading from RTC
+                checkTemp();                                    // Check if temperature is within operation range
+                if(operation == 1){
+
+                    // Collect and store Parent Measurement
+                    //sensor_measurement();                       // Collect parent measurement (sets sensor_value)
+                    snowfallCompute();                          // Compute snowfall
+                    cmToIn(0);                                  // Convert Parent snowfall from cm to in
+
+                    // Collect Child Measurement
+                    UCA1TXBUF = 0x23;                           // Send measurement request to BLE
+                    for(i = 0; i < 1000; i++){}
+
+                    UCA0IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
+                    while(receiving < 5){                       // Wait to receive all 5 characters of measurement
+                        UCA0IFG &= ~UCRXIFG;                    // Clear UART1 RX flag
+                        while(received == 0){}                  // Wait to receive a character
+                        received = 0;                           // Reset character received indicator
+                    }
+                    UCA0IE &= ~UCRXIE;                          // Disable UART1 RX interrupt
+
+
+                    sensor_value = (receive_data[1]-48)*100 + (receive_data[2]-48)*10 + (receive_data[3]-48);
+                    snowfallCompute();                          // Compute snowfall
+                    cmToIn(1);                                  // Convert Child #1 snowfall from cm to in
+
+                    // Send New Snowfall to Base Station
+                    if(snowfall == 1){                          // Determine if new snowfall has occurred
+                        sendToBase();                           // Send data packet to base
+                    }
+
+                    receiving = 0;                              // Reset receiving state indicator for measurement reception
+                }
+                collect = 0;                                    // Clear measurement collection indicator
             }
-            collect = 0;                                    // Clear measurement collection indicator
+
         }
 
     }
@@ -795,7 +750,7 @@ __interrupt void EUSCI_B0_I2C_ISR(void){
                     }
                 } else if (temp == 1) {                                 // Functionality for reading temperature
                     setTemp();                                          // Use data to update temperature packet
-                    if(t2 == 2) {                                       // Reset register counter to 0 after both temperature registers have been read from
+                    if(t2 == 1) {                                       // Reset register counter to 0 after both temperature registers have been read from
                         t2 = 0;
                     } else {                                            // Increase register counter to read from next temperature register
                         t2 = t2 + 1;
@@ -821,14 +776,6 @@ __interrupt void EUSCI_B0_I2C_ISR(void){
 __interrupt void PORT3_ISR(void){
 
     set = 1;                                                            // Indiciate Alarm Flag has been set in RTC Control Register
-
-    // Collect measurement every 15 minutes
-    /*if(count < 15) {                                                    // Increase counter if 15 minutes haven't passed
-        count = count + 1;
-    } else {                                                            // Clear counter and call for measurement if 15 minutes have passed
-        count = 0;
-        collect = 1;
-    }*/
 
     // Collect measurement every 1 minute
     count = 0;
@@ -864,6 +811,33 @@ __interrupt void EUSCI_A1_RX_ISR(void) {
 
     received = 1;                                                   // Set character received indicator
     UCA1IFG &= ~UCRXIFG;                                            // Clear UART1 RX flag
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Interrupt Service Routine: BLE UART1 Communication                */
+/*-------------------------------------------------------------------*/
+#pragma vector = EUSCI_A0_VECTOR
+__interrupt void EUSCI_A0_RX_ISR(void) {
+
+    if(receiving == 0 && UCA0RXBUF == 0x3C) {                       // State 0: Receiving = 0 -> wait for '<' to be received to indicate start of data
+        receiving = 1;
+    } else if(receiving == 1) {                                     // State 1: Receiving = 1 -> receive hundreds place value of measurement
+        receive_data[1] = UCA0RXBUF;
+        receiving = 2;
+    } else if (receiving == 2) {                                    // State 2: Receiving = 2 -> receive tens place value of measurement
+        receive_data[2] = UCA0RXBUF;
+        receiving = 3;
+    } else if (receiving == 3) {                                    // State 3: Receiving = 3 -> receive ones place value of measurement
+        receive_data[3] = UCA0RXBUF;
+        receiving = 4;
+    } else if (receiving == 4 && UCA0RXBUF == 0x3E) {               // State 4: Receiving = 4 -> wait for '>' to be received to indicate end of data
+        receiving = 5;
+
+    }
+
+    received = 1;                                                   // Set character received indicator
+    UCA0IFG &= ~UCRXIFG;                                            // Clear UART1 RX flag
 
 }
 

@@ -18,10 +18,18 @@ volatile int wait = 0;                                                          
 volatile int start = 0;                                                                         // Indicator for pulse start/end
 int snowfall = 0;                                                                               // Indicator for new snowfall
 int snowfallValue = 0;                                                                          // Value for new snowfall
-int prev_measurements[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                                 // Array for storing previous 12 measurements
+//int prev_measurements[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                                 // Array for storing previous 12 measurements
+
+int parent_measurements[] = {0, 0, 0, 0};                                                       // Array for storing previous 4 parent measurements
+int firstParent = 1;                                                                            // Indicator for first measurement (used for calibration)
+int child1_measurements[] = {0, 0, 0, 0};                                                       // Array for storing previous 4 child 1 measurements
+int firstChild1 = 1;                                                                            // Indicator for first measurement (used for calibration)
+int child2_measurements[] = {0, 0, 0, 0};                                                       // Array for storing previous 4 child 2 measurements
+int firstChild2 = 1;                                                                            // Indicator for fist measurement (used for calibration)
+
 int calibrationDistance;
 int calibrationButton = 0;                                                                      // Indicator for sensor calibration
-int firstMeasurement = 1;                                                                       // Indicator for first measurement (used for calibration)
+//int firstMeasurement = 1;                                                                       // Indicator for first measurement (used for calibration)
 
 /* RTC Global Variables */
 volatile unsigned int t1 = 0;                                                                   // Value for reading time/date and storing in packet
@@ -74,10 +82,10 @@ void init_button(void){
 void init_sensor(void) {
 
     // PWM Pin Setup
-    P2DIR &= ~BIT2;                                     // Set P2.7 (PWM) as input
-    P2REN |= BIT2;                                      // Enable pull up/down resistors
-    P2OUT |= BIT2;                                      // Set as pull up resistor
-    P2IES &= ~BIT2;                                     // Low to High Sensitivity for PWM
+    P2DIR &= ~BIT7;                                     // Set P2.7 (PWM) as input
+    P2REN |= BIT7;                                      // Enable pull up/down resistors
+    P2OUT |= BIT7;                                      // Set as pull up resistor
+    P2IES &= ~BIT7;                                     // Low to High Sensitivity for PWM
 
 }
 
@@ -199,23 +207,23 @@ void sensor_measurement(void) {
 
     for(i=0; i < 25; i++) {                                         // Collect multiple measurements
 
-        P2IES &= ~BIT2;                                             // LOW to HIGH sensitivity
+        P2IES &= ~BIT7;                                             // LOW to HIGH sensitivity
 
-        P2IE  |=  BIT2;                                             // Enable IRQ for PWM I/O pin
-        P2IFG &= ~BIT2;                                             // Clear flags for PWM I/O pin
+        P2IE  |=  BIT7;                                             // Enable IRQ for PWM I/O pin
+        P2IFG &= ~BIT7;                                             // Clear flags for PWM I/O pin
 
         while(start == 0){}                                         // Wait for start of pulse
 
-        P2IES |= BIT2;                                              // HIGH to LOW sensitivity
-        P2IFG &= ~BIT2;                                             // Clear flags for PWM
+        P2IES |= BIT7;                                              // HIGH to LOW sensitivity
+        P2IFG &= ~BIT7;                                             // Clear flags for PWM
 
         TB0CCTL0 |= CCIE;                                           // Enable IRQ for Timer B0
         TB0CCTL0 &= ~CCIFG;                                         // Clear flags for Timer B0
 
         while(start == 1){}                                         // Wait for PWM measurement
 
-        P2IE  &= ~BIT2;                                             // Disable IRQ for PWM
-        P2IFG &= ~BIT2;                                             // Clear flags for PWM
+        P2IE  &= ~BIT7;                                             // Disable IRQ for PWM
+        P2IFG &= ~BIT7;                                             // Clear flags for PWM
 
         TB0CCTL0 &= ~CCIE;                                          // Disable TimerB0 IRQ
         TB0CCTL0 &= ~CCIFG;                                         // Clear flags for Timer B0
@@ -288,23 +296,56 @@ void sensor_measurement(void) {
 /*-------------------------------------------------------------------*/
 /* Function for Computing New Snowfall from Previous Measurements    */
 /*-------------------------------------------------------------------*/
-void snowfallCompute(void){
-    int n;
+void snowfallCompute(int device){
 
-    firstMeasurement = 0;
-    prev_measurements[0] = 190;
+    if(device == 0) {
 
-    if (firstMeasurement == 1 || calibrationButton == 1){
-        calibrationDistance = sensor_value;                         // Store sensor measurement in calibration distance
-        prev_measurements[0] = calibrationDistance;                 // Store calibration distance in first measurement (for future snowfall computations)
-        calibrationButton = 0;                                      // Clear calibration button indicator
-        firstMeasurement = 0;                                       // Clear first measurement indicator
-    } else {
-        snowfallValue = prev_measurements[0] - sensor_value;        // Compare current sensor value to the last sensor value
-        for (n = (sizeof(prev_measurements)-1); n > 0; n--){        // Shift previous measurement array to get rid of old values
-            prev_measurements[n] = prev_measurements[n-1];
+        if(firstParent == 1) {
+            calibrationDistance = sensor_value;
+            parent_measurements[0] = calibrationDistance;
+            calibrationButton = 0;
+            firstParent= 0;
+            snowfallValue = 0;
+        } else {
+            snowfallValue = parent_measurements[0] - sensor_value;        // Compare current sensor value to the last sensor value
+            parent_measurements[3] = parent_measurements[2];
+            parent_measurements[2] = parent_measurements[1];
+            parent_measurements[1] = parent_measurements[0];
+            parent_measurements[0] = sensor_value;
         }
-        prev_measurements[0] = sensor_value;                        // Store newest sensor value
+
+    } else if (device == 1) {
+
+        if(firstChild1 == 1) {
+            calibrationDistance = sensor_value;
+            child1_measurements[0] = calibrationDistance;
+            calibrationButton = 0;
+            firstChild1 = 0;
+            snowfallValue = 0;
+        } else {
+            snowfallValue = child1_measurements[0] - sensor_value;        // Compare current sensor value to the last sensor value
+            child1_measurements[3] = child1_measurements[2];
+            child1_measurements[2] = child1_measurements[1];
+            child1_measurements[1] = child1_measurements[0];
+            child1_measurements[0] = sensor_value;
+        }
+
+    } else if (device == 2) {
+
+        if(firstChild2 == 1) {
+            calibrationDistance = sensor_value;
+            child1_measurements[0] = calibrationDistance;
+            calibrationButton = 0;
+            firstChild2 = 0;
+            snowfallValue = 0;
+        } else {
+            snowfallValue = child2_measurements[0] - sensor_value;        // Compare current sensor value to the last sensor value
+            child2_measurements[3] = child2_measurements[2];
+            child2_measurements[2] = child2_measurements[1];
+            child2_measurements[1] = child2_measurements[0];
+            child2_measurements[0] = sensor_value;
+        }
+
     }
 
 }
@@ -326,11 +367,6 @@ void cmToIn(int device){
     } else if (device == 2) {                               // Child #2 Measurement indexing
         n = 5;
     }
-
-    data[0] = clusterID;                                    // Include cluster ID in data packet
-    data[1] = time[3]*10 + time[2];                         // Include min in data packet
-    data[2] = time[5]*10 + time[4];                         // Include hour in data packet
-
 
     // Place individual digits in data for base (tens -> data1[5], ones -> data1[6], tenths -> data[8])
 
@@ -587,6 +623,7 @@ int main(void) {
     UCA1CTLW0 |= UCSWRST;                               // Put into software reset for UART1
     UCB0CTLW0 |= UCSWRST;                               // Put into software reset for I2C
 
+    /* Initialize Ports/Pins */
     init_button();
     init_sensor();                                      // Initialize I/O settings for sensor
     init_sensorTimer();                                 // Initialize timer settings for PWM measurement
@@ -619,18 +656,18 @@ int main(void) {
 
     while(1){
 
-        if(set == 1) {                                      // Get date/time and temperature from RTC and clear Alarm 2 flag if it has been set
+        if(set == 1) {                                          // Get date/time and temperature from RTC and clear Alarm 2 flag if it has been set
             getTime();
             clearAlarm();
-            checkTime();                                    // Check if base station update is needed
+            checkTime();                                        // Check if base station update is needed
 
             if(collect == 1) {                                  // Collect measurements if RTC indicates 15 minutes have passed
 
                 P6DIR |= BIT2;                                  // Set P6.2 to output for BLE reset
                 P6OUT |= BIT2;                                  // Set P6.2 HIGH for active high reset
                 for(i = 0; i < 1000; i++){}                     // Small delay to wait for reset
-                P6DIR &= ~ BIT2;                                //
-                for(i = 0; i < 10; i++) {
+                P6DIR &= ~ BIT2;
+                for(i = 0; i < 10; i++) {                       // Delay to wait for BLE to restart
                     delay();
                 }
 
@@ -638,37 +675,35 @@ int main(void) {
                 checkTemp();                                    // Check if temperature is within operation range
                 if(operation == 1){
 
-                    // Collect and store Parent Measurement
-                    //sensor_measurement();                       // Collect parent measurement (sets sensor_value)
-                    snowfallCompute();                          // Compute snowfall
+                    // Collect and Store Parent Measurement
+                    sensor_measurement();                       // Collect parent measurement (sets sensor_value)
+                    snowfallCompute(0);                         // Compute Parent snowfall
                     cmToIn(0);                                  // Convert Parent snowfall from cm to in
 
-                    // Collect Child Measurement
+                    // Request Child 1 Measurement
                     UCA1TXBUF = 0x23;                           // Send measurement request to BLE
                     for(i = 0; i < 1000; i++){}
-
                     UCA0IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
-                    while(receiving < 5){                       // Wait to receive all 5 characters of measurement
-                        UCA0IFG &= ~UCRXIFG;                    // Clear UART1 RX flag
-                        while(received == 0){}                  // Wait to receive a character
-                        received = 0;                           // Reset character received indicator
-                    }
-                    UCA0IE &= ~UCRXIE;                          // Disable UART1 RX interrupt
-
-
-                    sensor_value = (receive_data[1]-48)*100 + (receive_data[2]-48)*10 + (receive_data[3]-48);
-                    snowfallCompute();                          // Compute snowfall
-                    cmToIn(1);                                  // Convert Child #1 snowfall from cm to in
-
-                    // Send New Snowfall to Base Station
-                    if(snowfall == 1){                          // Determine if new snowfall has occurred
-                        sendToBase();                           // Send data packet to base
-                    }
-
-                    receiving = 0;                              // Reset receiving state indicator for measurement reception
                 }
                 collect = 0;                                    // Clear measurement collection indicator
             }
+
+        }
+
+        if(receiving == 5) {                                    // Send values to base once Child Measurement has been received
+
+            // Collect and Store Child 1 Measurement
+            UCA0IE &= ~UCRXIE;                                  // Disable UART1 RX interrupt
+            sensor_value = (receive_data[1]-48)*100 + (receive_data[2]-48)*10 + (receive_data[3]-48);   // Store received value from Child
+            snowfallCompute(1);                                 // Compute Child 1 snowfall
+            cmToIn(1);                                          // Convert Child 1 snowfall from cm to in
+
+            snowfall = 1;                                       // (For Testing, always send data to base station)
+            if(snowfall == 1){                                  // Determine if new snowfall has occurred
+                sendToBase();                                   // Send data packet to base
+            }
+
+            receiving = 0;                                      // Reset receiving state indicator for measurement reception
 
         }
 
@@ -696,7 +731,7 @@ __interrupt void ISR_PWM(void){
         TB0CCTL0 |= CCIS__GND;
     }
 
-    P2IFG &= ~BIT2;                     // Clear interrupt flag
+    P2IFG &= ~BIT7;                     // Clear interrupt flag
 
 }
 
@@ -847,10 +882,10 @@ __interrupt void EUSCI_A0_RX_ISR(void) {
 #pragma vector = PORT1_VECTOR
 __interrupt void PORT1_ISR(void){
 
-    calibrationButton = 1;                                              // Set indicator for button press
-    firstMeasurement = 1;                                               // Set indicator for first measurement
+    //calibrationButton = 1;                                              // Set indicator for button press
+    //firstMeasurement = 1;                                               // Set indicator for first measurement
 
-    snowfallCompute();                                                  // Calibrate sensor upon button press
+    //snowfallCompute(0);                                                  // Calibrate sensor upon button press
 
     P1IFG &= ~BIT1;                                                     // Clear flags for button
 

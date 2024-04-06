@@ -348,6 +348,10 @@ void snowfallCompute(int device){
 
     }
 
+    if(snowfallValue < 0) {                                                 // (For Testing, send negative values as 0 to base)
+        snowfallValue = 0;
+    }
+
 }
 
 /*-------------------------------------------------------------------*/
@@ -355,8 +359,10 @@ void snowfallCompute(int device){
 /*-------------------------------------------------------------------*/
 void cmToIn(int device){
 
+    // Fix this??
+
     int n;
-    unsigned long centimeters, inches;                      // Could use two longs (32 bits) for better precision potentially
+    unsigned long centimeters, inches;
 
     centimeters = snowfallValue;
 
@@ -368,9 +374,11 @@ void cmToIn(int device){
         n = 5;
     }
 
+    centimeters = 80;
+
     // Place individual digits in data for base (tens -> data1[5], ones -> data1[6], tenths -> data[8])
 
-    if(centimeters < 17) {                                 // For measurements <= 16 centimeters, use scale of 1000 (precision to tenths place)
+    if(centimeters < 17 && centimeters >= 0) {                                 // For measurements <= 16 centimeters, use scale of 1000 (precision to tenths place)
         inches = ((3937*centimeters)-((3937*centimeters)%1000))/1000; // Mod 100?
         data[n] = inches;
         if(inches > 0) {
@@ -380,7 +388,11 @@ void cmToIn(int device){
     } else if (centimeters < 167) {                        // For measurements <= 166, use scale of 100 (0.394 -> 394)
 
         inches = ((394*centimeters) - ((394*centimeters)%10))/100;
-        data[n] = inches;
+        if(inches < 255) {
+            data[n] = inches;
+        } else {
+            data[n] = 0xCF;
+        }
         snowfall = 1;
 
     }
@@ -654,9 +666,21 @@ int main(void) {
 
     int i;
 
+    receiving = 6;
+
     while(1){
 
         if(set == 1) {                                          // Get date/time and temperature from RTC and clear Alarm 2 flag if it has been set
+
+            if(receiving != 6) {
+                data[4] = 0xCF;                                 // Value never received from Child 1, still send to base station (indicate Child has no value)
+                snowfall = 1;                                   // (For Testing, always send data to base station)
+                if(snowfall == 1) {                             // Still only send to base if Parent measured new snowfall
+                    sendToBase();
+                }
+                receiving = 6;
+            }
+
             getTime();
             clearAlarm();
             checkTime();                                        // Check if base station update is needed
@@ -681,6 +705,7 @@ int main(void) {
                     cmToIn(0);                                  // Convert Parent snowfall from cm to in
 
                     // Request Child 1 Measurement
+                    receiving = 0;                              // Reset receiving state indicator for next measurement reception
                     UCA1TXBUF = 0x23;                           // Send measurement request to BLE
                     for(i = 0; i < 1000; i++){}
                     UCA0IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
@@ -703,7 +728,7 @@ int main(void) {
                 sendToBase();                                   // Send data packet to base
             }
 
-            receiving = 0;                                      // Reset receiving state indicator for measurement reception
+            receiving = 6;                                      // Indicate Child 1 measurement has been received
 
         }
 
@@ -812,40 +837,17 @@ __interrupt void PORT3_ISR(void){
 
     set = 1;                                                            // Indiciate Alarm Flag has been set in RTC Control Register
 
-    // Collect measurement every 1 minute
-    count = 0;
-    collect = 1;                                                        // Set measurement collection indicator
+    // Collect measurement every 5 minutes
+    if(count < 5) {                                                    // Increase counter if 15 minutes haven't passed
+        count = count + 1;
+    } else {                                                            // Clear counter and call for measurement if 15 minutes have passed
+        count = 0;
+        collect = 1;
+    }
 
     P3IE &= ~BIT0;                                                      // Temporarily disable IRQ for SQW
     P3IFG &= ~BIT0;                                                     // Clear flags for SW1
 
-
-}
-
-/*-------------------------------------------------------------------*/
-/* Interrupt Service Routine: BLE UART1 Communication                */
-/*-------------------------------------------------------------------*/
-#pragma vector = EUSCI_A1_VECTOR
-__interrupt void EUSCI_A1_RX_ISR(void) {
-
-    if(receiving == 0 && UCA1RXBUF == 0x3C) {                       // State 0: Receiving = 0 -> wait for '<' to be received to indicate start of data
-        receiving = 1;
-    } else if(receiving == 1) {                                     // State 1: Receiving = 1 -> receive hundreds place value of measurement
-        receive_data[1] = UCA1RXBUF;
-        receiving = 2;
-    } else if (receiving == 2) {                                    // State 2: Receiving = 2 -> receive tens place value of measurement
-        receive_data[2] = UCA1RXBUF;
-        receiving = 3;
-    } else if (receiving == 3) {                                    // State 3: Receiving = 3 -> receive ones place value of measurement
-        receive_data[3] = UCA1RXBUF;
-        receiving = 4;
-    } else if (receiving == 4 && UCA1RXBUF == 0x3E) {               // State 4: Receiving = 4 -> wait for '>' to be received to indicate end of data
-        receiving = 5;
-
-    }
-
-    received = 1;                                                   // Set character received indicator
-    UCA1IFG &= ~UCRXIFG;                                            // Clear UART1 RX flag
 
 }
 

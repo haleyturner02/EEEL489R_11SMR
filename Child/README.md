@@ -6,7 +6,7 @@ Each Child Device is responsible for collecting a sensor measurement when indica
 
 **Software Platform:** Code Composer Studio \
 **Code:** child.c \
-**Required Hardware:** MSP430FR2355 Launchpad (LP) + USB Cable, MSP430FR2310 Microcontroller, Jumper Wires \
-**Connections:** \
+**Required Hardware:** Child PCB, MSP430FR2355 Launchpad (LP) + USB Cable, Jumper Wires \
+**Connections:** SWD Interface \
 **Overview:** \
-This code is what is run on the microcontroller on the Child PCB/Device during normal operation for collecting and communicating data. The Launchpad is used to program the target microcontroller.
+This code is what is run on the microcontroller of the Child Device during normal operation for collecting and communicating data. The Launchpad is used to program and debug the target microcontroller.

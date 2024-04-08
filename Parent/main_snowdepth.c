@@ -386,6 +386,8 @@ void sendToBase(){
     } else {
         data[5] = 0xCF;                                     // No value/value out of range
     }
+    
+    data[5] = 0xCF;                                         // Hard set Child 2 value (no value)
 
     for(j = 0; j < sizeof(data); j++){
         UCA0TXBUF = data[j] + 48;                           // Send each value in data packet to transceiver to transmit to base

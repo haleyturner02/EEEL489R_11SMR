@@ -13,19 +13,21 @@
 /* Sensor Global Variables */
 volatile int cycles;                                                                            // Cycle counter for pulse measuring
 volatile int measurement_array[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                              // Array for collecting 10 measurements
-volatile int parent_value = 0xCF;                                                               // Parent sensor measurement
+int parent_calibration = 0;                                                                     // Initial parent sensor measurement
+volatile int parent_value = 0xCF;                                                               // Latest parent sensor measurement
+int child1_calibration = 0;                                                                     // Initial child 1 sensor measurement
 volatile int child1_value = 0xCF;                                                               // Child 1 sensor measurement
+int child2_calibration = 0;                                                                     // Initial child 2 sensor measurement
 volatile int child2_value = 0xCF;                                                               // Child 2 sensor measurement
 volatile int wait = 0;                                                                          // Indicator for sensor startup time
 volatile int start = 0;                                                                         // Indicator for pulse start/end
-int calibrationDistance;
-int calibrationButton = 0;                                                                      // Indicator for sensor calibration
 
 /* RTC Global Variables */
 volatile unsigned int t1 = 0;                                                                   // Value for reading time/date and storing in packet
 volatile unsigned int t2 = 0;                                                                   // Value for reading temperature and storing in packet
 volatile unsigned int set = 0;                                                                  // Indicator for alarm occurrence
-volatile unsigned int collect =0;                                                               // Indicator for collecting measurement(s)
+volatile unsigned int collect = 0;                                                              // Indicator for collecting measurements
+volatile unsigned int send = 0;                                                                 // Indicator for sending measurements
 volatile unsigned int write = 1;                                                                // Indicator for reading or writing to RTC (1 -> write, 0 -> read)
 volatile unsigned int temp = 0;                                                                 // Indicator for reading time or temperature (1 -> temperature, 0 -> time)
 volatile unsigned int operation = 1;                                                            // Indicator for operation (1 -> normal operation, 0 -> too cold to operate)
@@ -40,6 +42,7 @@ int temperature[] = {0, 0, 0, 0, 0};                                            
 // Packet Example: +21.75 degrees Celsius -> {5, 7, 1, 2, 0}
 
 /* BLE UART1 Global Variables */
+volatile int retry = 0;                                                                         // Retry BLE connection indicator
 volatile unsigned int receiving = 0;                                                            // Receiving state indicator (for measurement)
 volatile unsigned int received = 0;                                                             // Character received indicator
 volatile unsigned char receive_data [] = {0x3C, 0x30, 0x30, 0x30, 0x3E};                        // Packet for received measurement
@@ -277,6 +280,79 @@ void sensor_measurement(void) {
     }
 
     parent_value = filter_value;
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Temperature Compensation for Sensor Measurement                   */
+/*-------------------------------------------------------------------*/
+void temperatureCompensation(int device){
+
+    float val, t, result;
+
+    if(device == 0) {                               // Determine device to compensate value for
+        val = parent_value;
+    } else if (device == 1) {
+        val = child1_value;
+    } else if (device == 2) {
+        val = child2_value;
+    }
+
+    t = (temperature[3] * 10) + temperature[2] + (temperature[1] * 0.1) + (temperature[0] * 0.01);      // Get temperature for compensation
+
+    if(temperature[4] == 1) {                       // Determine if temperature is negative
+        t = -t;
+    }
+
+    result = ((331.2 + (t*0.61))*val)/345;          // Compensate value
+
+    val = ((int) result) + 0.5;                     // Get whole portion of compensation + 0.5
+
+    if(val <= result){                              // Round compensated value to nearest whole number
+        result = result + 1;
+    }
+
+    if(device == 0) {                               // Set device value to compensated result
+        parent_value = result;
+    } else if (device == 1) {
+        child1_value = result;
+    } else if (device == 2) {
+        child2_value = result;
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* BLE Module Reset                                                  */
+/*-------------------------------------------------------------------*/
+void bleReset(){
+
+    int i;
+
+    P6DIR |= BIT2;                                  // Set P6.2 to output for BLE reset
+    P6OUT |= BIT2;                                  // Set P6.2 HIGH for active high reset
+    for(i = 0; i < 1000; i++){}                     // Small delay to wait for reset
+    P6DIR &= ~ BIT2;
+    for(i = 0; i < 10; i++) {                       // Delay to wait for BLE to restart
+        delay();
+    }
+
+}
+
+/*-------------------------------------------------------------------*/
+/* Request Value from Child Device                                   */
+/*-------------------------------------------------------------------*/
+void requestValue(int device){
+
+    int i;
+
+    receiving = 0;                              // Reset receiving state indicator for next measurement reception
+
+    if(device == 1) {
+        UCA1TXBUF = 0x23;                       // Send request to BLE for Child 1 value
+    }
+    for(i = 0; i < 1000; i++){}
+    UCA0IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
 
 }
 
@@ -551,41 +627,42 @@ int main(void) {
 
         if(set == 1) {                                          // Get date/time and temperature from RTC and clear Alarm 2 flag if it has been set
 
-            if(receiving != 6) {
-                data[4] = 0xCF;                                 // Value never received from Child 1, still send to base station (indicate Child has no value)
-                sendToBase();
-                receiving = 6;
-            }
-
             getTime();
             clearAlarm();
 
+            if(retry < 2 && receiving != 6){
+                bleReset();                                     // Reset the BLE module
+                requestValue(1);                                // Request Child 1 value
+                retry = retry + 1;
+            }
+
             if(collect == 1) {                                  // Collect measurements if RTC indicates 15 minutes have passed
 
-                P6DIR |= BIT2;                                  // Set P6.2 to output for BLE reset
-                P6OUT |= BIT2;                                  // Set P6.2 HIGH for active high reset
-                for(i = 0; i < 1000; i++){}                     // Small delay to wait for reset
-                P6DIR &= ~ BIT2;
-                for(i = 0; i < 10; i++) {                       // Delay to wait for BLE to restart
-                    delay();
-                }
-
+                bleReset();                                     // Reset the BLE module
                 getTemp();                                      // Collect temperature reading from RTC
                 checkTemp();                                    // Check if temperature is within operation range
                 if(operation == 1){
 
-                    // Collect and Store Parent Measurement
-                    sensor_measurement();                       // Collect parent measurement (sets sensor_value)
+                    sensor_measurement();                       // Collect Parent value
+                    //temperatureCompensation(0);               // Apply temperature compensation for Parent value
+                    if(parent_calibration == 0) {               // Store first Parent value as device calibration distance
+                        parent_calibration = parent_value;
+                    }
+                    parent_value = parent_calibration - parent_value;   // Compute Parent snow depth
 
-                    // Request Child 1 Measurement
-                    receiving = 0;                              // Reset receiving state indicator for next measurement reception
-                    UCA1TXBUF = 0x23;                           // Send measurement request to BLE
-                    for(i = 0; i < 1000; i++){}
-                    UCA0IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
+                    requestValue(1);                            // Request Child 1 value
                 }
                 collect = 0;                                    // Clear measurement collection indicator
             }
 
+            if(send == 1) {
+                if(receiving != 6) {                            // Value from Child 1 not received
+                    data[4] = 0xCF;
+                }
+                sendToBase();                                   // Send data to base station
+                retry = 0;
+                send = 0;                                       // Clear send data indicator
+            }
         }
 
         if(receiving == 5) {                                    // Send values to base once Child Measurement has been received
@@ -593,8 +670,13 @@ int main(void) {
             // Collect and Store Child 1 Measurement
             UCA0IE &= ~UCRXIE;                                  // Disable UART1 RX interrupt
             child1_value = (receive_data[1]-48)*100 + (receive_data[2]-48)*10 + (receive_data[3]-48);   // Store received value from Child
-            sendToBase();
+            if(child1_calibration == 0) {                       // Store first Child 1 value as device calibration distance
+                child1_calibration = child1_value;
+            }
+            child1_value = child1_calibration - child1_value;   // Compute Child 1 snow depth
+            //temperatureCompensation(1);                       // Apply temperature compensation for Child 1 value
             receiving = 6;                                      // Indicate Child 1 measurement has been received
+            retry = 0;                                          // No need to rety BLE connection
 
         }
 
@@ -703,12 +785,14 @@ __interrupt void PORT3_ISR(void){
 
     set = 1;                                                            // Indiciate Alarm Flag has been set in RTC Control Register
 
-    // Collect measurement every 5 minutes
-    if(count < 5) {                                                    // Increase counter if 15 minutes haven't passed
+    if(count < 14) {                                                    // Increase counter if 15 minutes haven't passed
         count = count + 1;
-    } else {                                                            // Clear counter and call for measurement if 15 minutes have passed
+        if(count == 11) {
+            collect = 1;                                                // Set indicator to collect values after 12 minutes
+        }
+    } else {                                                            // Clear counter and send data to base station after 15 minutes
         count = 0;
-        collect = 1;
+        send = 1;
     }
 
     P3IE &= ~BIT0;                                                      // Temporarily disable IRQ for SQW
@@ -750,9 +834,10 @@ __interrupt void EUSCI_A0_RX_ISR(void) {
 #pragma vector = PORT1_VECTOR
 __interrupt void PORT1_ISR(void){
 
-    //calibrationButton = 1;                                              // Set indicator for button press
-    //firstMeasurement = 1;                                               // Set indicator for first measurement
+    parent_calibration = 0;                                         // Reset all device calibration values to 0 so that next measurement taken from each is the new calibration value
+    child1_calibration = 0;
+    child2_calibration = 0;
 
-    P1IFG &= ~BIT1;                                                     // Clear flags for button
+    P1IFG &= ~BIT1;                                                 // Clear flags for button
 
 }

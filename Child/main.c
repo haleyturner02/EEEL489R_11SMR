@@ -236,7 +236,7 @@ int main(void){
         UCA0IE &= ~UCRXIE;
 
         if(receive_data == 0x23){
-            //sensor_measurement();
+            sensor_measurement();
             if(sensor_value > 255){
                 sensor_value = 0;
             }

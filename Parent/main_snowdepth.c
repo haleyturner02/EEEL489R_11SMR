@@ -14,11 +14,11 @@
 volatile int cycles;                                                                            // Cycle counter for pulse measuring
 volatile int measurement_array[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};                              // Array for collecting 10 measurements
 int parent_calibration = 0;                                                                     // Initial parent sensor measurement
-volatile int parent_value = 0xCF;                                                               // Latest parent sensor measurement
+int parent_value = 0xCF;                                                               // Latest parent sensor measurement
 int child1_calibration = 0;                                                                     // Initial child 1 sensor measurement
-volatile int child1_value = 0xCF;                                                               // Child 1 sensor measurement
+int child1_value = 0xCF;                                                               // Child 1 sensor measurement
 int child2_calibration = 0;                                                                     // Initial child 2 sensor measurement
-volatile int child2_value = 0xCF;                                                               // Child 2 sensor measurement
+int child2_value = 0xCF;                                                               // Child 2 sensor measurement
 volatile int wait = 0;                                                                          // Indicator for sensor startup time
 volatile int start = 0;                                                                         // Indicator for pulse start/end
 
@@ -72,10 +72,10 @@ void init_button(void){
 void init_sensor(void) {
 
     // PWM Pin Setup
-    P2DIR &= ~BIT7;                                     // Set P2.7 (PWM) as input
-    P2REN |= BIT7;                                      // Enable pull up/down resistors
-    P2OUT |= BIT7;                                      // Set as pull up resistor
-    P2IES &= ~BIT7;                                     // Low to High Sensitivity for PWM
+    P2DIR &= ~BIT7;                 // Set P2.7 (PWM) as input
+    P2REN |= BIT7;                  // Enable pull up/down resistors
+    P2OUT |= BIT7;                  // Set as pull up resistor
+    P2IES &= ~BIT7;                 // Low to High Sensitivity for PWM
 
 }
 
@@ -84,9 +84,9 @@ void init_sensor(void) {
 /*-------------------------------------------------------------------*/
 void init_sensorTimer(void) {
 
-    TB0CTL |= TBCLR;                                    // Clear Timer B0
-    TB0CTL |= TBSSEL__SMCLK;                            // Select SMCLK
-    TB0CTL |= MC__CONTINUOUS;                           // Use continuous counting mode
+    TB0CTL |= TBCLR;                // Clear Timer B0
+    TB0CTL |= TBSSEL__SMCLK;        // Select SMCLK
+    TB0CTL |= MC__CONTINUOUS;       // Use continuous counting mode
     TB0CCTL0 |= CAP;
     TB0CCTL0 |= CM__BOTH;
     TB0CCTL0 |= CCIS__GND;
@@ -98,10 +98,10 @@ void init_sensorTimer(void) {
 /*-------------------------------------------------------------------*/
 void init_startupTimer(void) {
 
-    TB1CTL |= TBCLR;                                    // Clear Timer B0
-    TB1CTL |= TBSSEL__ACLK;                             // Select ACLK
-    TB1CTL |= MC__UP;                                   // Using counting up mode
-    TB1CCR0 = 6400;                                     // Set to count to 200ms
+    TB1CTL |= TBCLR;            // Clear Timer B0
+    TB1CTL |= TBSSEL__ACLK;     // Select ACLK
+    TB1CTL |= MC__UP;           // Using counting up mode
+    TB1CCR0 = 6400;             // Set to count to 200ms
 
 }
 
@@ -352,7 +352,7 @@ void requestValue(int device){
         UCA1TXBUF = 0x23;                       // Send request to BLE for Child 1 value
     }
     for(i = 0; i < 1000; i++){}
-    UCA0IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
+    UCA1IE |= UCRXIE;                           // Enable UART1 RX interrupt for measurement reception
 
 }
 
@@ -369,24 +369,30 @@ void sendToBase(){
     data[1] = time[3]*10 + time[2];                         // Include min in data packet
     data[2] = time[5]*10 + time[4];                         // Include hour in data packet
 
-    if(parent_value < 207) {
+    if(parent_value < 0) {
+        parent_value = 0;
+    } else if(parent_value < 207) {
         data[3] = parent_value;                             // Include parent snow depth in data packet
     } else {
         data[3] = 0xCF;                                     // No value/value out of range
     }
 
-    if(child1_value < 207) {
+    if(child1_value < 0) {
+        child1_value = 0;
+    } else if(child1_value < 207) {
         data[4] = child1_value;                             // Include child 1 snow depth in data packet
     } else {
         data[4] = 0xCF;                                     // No value/value out of range
     }
 
-    if(child2_value < 207) {
+    if(child2_value < 0) {
+        child2_value = 0;
+    } else if(child2_value < 207) {
         data[5] = child2_value;                             // Include child 2 snow depth in data packet
     } else {
         data[5] = 0xCF;                                     // No value/value out of range
     }
-    
+
     data[5] = 0xCF;                                         // Hard set Child 2 value (no value)
 
     for(j = 0; j < sizeof(data); j++){
@@ -607,7 +613,7 @@ int main(void) {
     UCB0CTLW0 &= ~UCSWRST;                              // Take out of software reset for I2C
 
     /* Enable interrupts */
-    UCB0IE |= UCTXIE0 | UCRXIE0;;                       // Interrupt enable for I2C
+    UCB0IE |= UCTXIE0 | UCRXIE0;                        // Interrupt enable for I2C
 
     P1IE |= BIT1;                                       // Enable IRQ for button calibration
     P1IFG &= ~BIT1;                                     // Clear flags for button
@@ -624,6 +630,9 @@ int main(void) {
     int i;
 
     receiving = 6;
+
+    sensor_measurement();
+    delay();
 
     while(1){
 
@@ -670,15 +679,19 @@ int main(void) {
         if(receiving == 5) {                                    // Send values to base once Child Measurement has been received
 
             // Collect and Store Child 1 Measurement
-            UCA0IE &= ~UCRXIE;                                  // Disable UART1 RX interrupt
+            UCA1IE &= ~UCRXIE;                                  // Disable UART1 RX interrupt
+
             child1_value = (receive_data[1]-48)*100 + (receive_data[2]-48)*10 + (receive_data[3]-48);   // Store received value from Child
+
             if(child1_calibration == 0) {                       // Store first Child 1 value as device calibration distance
                 child1_calibration = child1_value;
             }
+
             child1_value = child1_calibration - child1_value;   // Compute Child 1 snow depth
             //temperatureCompensation(1);                       // Apply temperature compensation for Child 1 value
             receiving = 6;                                      // Indicate Child 1 measurement has been received
             retry = 0;                                          // No need to rety BLE connection
+
 
         }
 
@@ -707,6 +720,7 @@ __interrupt void ISR_PWM(void){
     }
 
     P2IFG &= ~BIT7;                     // Clear interrupt flag
+    TB0CCTL0 |= CCIS__GND;
 
 }
 
@@ -806,27 +820,27 @@ __interrupt void PORT3_ISR(void){
 /*-------------------------------------------------------------------*/
 /* Interrupt Service Routine: BLE UART1 Communication                */
 /*-------------------------------------------------------------------*/
-#pragma vector = EUSCI_A0_VECTOR
-__interrupt void EUSCI_A0_RX_ISR(void) {
+#pragma vector = EUSCI_A1_VECTOR
+__interrupt void EUSCI_A1_RX_ISR(void) {
 
-    if(receiving == 0 && UCA0RXBUF == 0x3C) {                       // State 0: Receiving = 0 -> wait for '<' to be received to indicate start of data
+    if(receiving == 0 && UCA1RXBUF == 0x3C) {                       // State 0: Receiving = 0 -> wait for '<' to be received to indicate start of data
         receiving = 1;
     } else if(receiving == 1) {                                     // State 1: Receiving = 1 -> receive hundreds place value of measurement
-        receive_data[1] = UCA0RXBUF;
+        receive_data[1] = UCA1RXBUF;
         receiving = 2;
     } else if (receiving == 2) {                                    // State 2: Receiving = 2 -> receive tens place value of measurement
-        receive_data[2] = UCA0RXBUF;
+        receive_data[2] = UCA1RXBUF;
         receiving = 3;
     } else if (receiving == 3) {                                    // State 3: Receiving = 3 -> receive ones place value of measurement
-        receive_data[3] = UCA0RXBUF;
+        receive_data[3] = UCA1RXBUF;
         receiving = 4;
-    } else if (receiving == 4 && UCA0RXBUF == 0x3E) {               // State 4: Receiving = 4 -> wait for '>' to be received to indicate end of data
+    } else if (receiving == 4 && UCA1RXBUF == 0x3E) {               // State 4: Receiving = 4 -> wait for '>' to be received to indicate end of data
         receiving = 5;
 
     }
 
     received = 1;                                                   // Set character received indicator
-    UCA0IFG &= ~UCRXIFG;                                            // Clear UART1 RX flag
+    UCA1IFG &= ~UCRXIFG;                                            // Clear UART1 RX flag
 
 }
 

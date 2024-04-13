@@ -50,6 +50,7 @@ volatile unsigned char receive_data [] = {0x3C, 0x30, 0x30, 0x30, 0x3E};        
 // Packet Example: 0x23A -> {0x3C, 0x32, 0x33, 0x3A, 0x3D}
 
 /* Transceiver UART0 Global Variables */
+unsigned int baseSend = 0;
 unsigned char clusterID = 0x01;                                                                 // Cluster ID
 volatile unsigned char data[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 // Packet Format: {clusterID, minutes, hours, depth (parent), depth (child #1), depth (child #2)}
@@ -670,7 +671,14 @@ int main(void) {
                 if(receiving != 6) {                            // Value from Child 1 not received
                     data[4] = 0xCF;
                 }
-                sendToBase();                                   // Send data to base station
+
+                if(baseSend == 2){
+                    sendToBase();                                   // Send data to base station
+                    baseSend = 0;
+                } else {
+                    baseSend = baseSend + 1;
+                }
+                
                 retry = 0;
                 send = 0;                                       // Clear send data indicator
             }
@@ -801,9 +809,9 @@ __interrupt void PORT3_ISR(void){
 
     set = 1;                                                            // Indiciate Alarm Flag has been set in RTC Control Register
 
-    if(count < 14) {                                                    // Increase counter if 15 minutes haven't passed
+    if(count < 4) {                                                    // Increase counter if 15 minutes haven't passed
         count = count + 1;
-        if(count == 11) {
+        if(count == 1) {
             collect = 1;                                                // Set indicator to collect values after 12 minutes
         }
     } else {                                                            // Clear counter and send data to base station after 15 minutes
